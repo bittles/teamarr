@@ -99,19 +99,12 @@ class XMLTVGenerator:
             desc.set('lang', 'en')
             desc.text = event['description']
 
-        # Categories (Gracenote: Sports + Sports event + specific sport)
-        self._add_category(programme, 'Sports')
-        self._add_category(programme, 'Sports event')
-
-        # Add sport-specific category
-        league_category = team.get('league_category', 'Sports')
-        if league_category != 'Sports':
-            self._add_category(programme, league_category)
-
-        # Add user-defined categories
+        # Categories - only user-defined categories
+        added_categories = set()
         for category in team.get('categories', []):
-            if category not in ['Sports', 'Sports event', league_category]:
+            if category not in added_categories:
                 self._add_category(programme, category)
+                added_categories.add(category)
 
         # Icon (team logo)
         if team.get('team_logo_url'):

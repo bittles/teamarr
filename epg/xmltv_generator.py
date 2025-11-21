@@ -39,7 +39,7 @@ class XMLTVGenerator:
         for team in teams:
             team_events = events.get(str(team['id']), [])
             for event in team_events:
-                self._add_programme(tv, team, event)
+                self._add_programme(tv, team, event, settings)
 
         # Convert to pretty XML string
         xml_str = self._prettify(tv)
@@ -63,7 +63,7 @@ class XMLTVGenerator:
             icon = ET.SubElement(channel, 'icon')
             icon.set('src', team['team_logo_url'])
 
-    def _add_programme(self, parent: ET.Element, team: Dict, event: Dict):
+    def _add_programme(self, parent: ET.Element, team: Dict, event: Dict, settings: Dict):
         """
         Add programme element for a game/event
 
@@ -120,8 +120,12 @@ class XMLTVGenerator:
         flags = team.get('flags', {})
         if flags.get('date', False):
             date_elem = ET.SubElement(programme, 'date')
-            # Use the start date of the event
-            date_elem.text = event['start_datetime'].strftime('%Y%m%d')
+            # Use the start date of the event in user's timezone
+            # Convert from UTC to user's timezone for correct date
+            from zoneinfo import ZoneInfo
+            user_tz = settings.get('default_timezone', 'America/New_York')
+            local_dt = event['start_datetime'].astimezone(ZoneInfo(user_tz))
+            date_elem.text = local_dt.strftime('%Y%m%d')
 
         # Icon (team logo)
         if team.get('team_logo_url'):

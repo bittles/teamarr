@@ -35,6 +35,7 @@ def init_database():
     migrate_team_ids_to_numeric()
     migrate_output_path_to_data_dir()
     migrate_between_games_to_idle()
+    migrate_timezone_from_env()
 
 def migrate_team_ids_to_numeric():
     """
@@ -183,6 +184,44 @@ def migrate_between_games_to_idle():
 
     except Exception as e:
         print(f"⚠️  Idle fields migration warning: {e}")
+        # Don't fail startup if migration has issues
+    finally:
+        conn.close()
+
+def migrate_timezone_from_env():
+    """
+    Set default_timezone from TZ environment variable if present.
+
+    This ensures the UI timezone setting matches the container's TZ environment
+    variable, keeping them synchronized.
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    try:
+        # Get TZ environment variable
+        tz_env = os.environ.get('TZ')
+
+        if tz_env:
+            # Check current timezone setting
+            result = cursor.execute("SELECT default_timezone FROM settings WHERE id = 1").fetchone()
+
+            if result:
+                current_tz = result[0]
+
+                # Only update if different (don't override user's explicit choice every time)
+                # But on first run (when it's still the default), set it from env
+                if current_tz == 'America/New_York':  # Default value
+                    cursor.execute("""
+                        UPDATE settings
+                        SET default_timezone = ?
+                        WHERE id = 1
+                    """, (tz_env,))
+                    conn.commit()
+                    print(f"🌍 Set timezone to {tz_env} from TZ environment variable")
+
+    except Exception as e:
+        print(f"⚠️  Timezone migration warning: {e}")
         # Don't fail startup if migration has issues
     finally:
         conn.close()

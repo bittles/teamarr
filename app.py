@@ -1007,7 +1007,7 @@ def generate_epg():
 
                 # Generate filler entries (pregame/postgame/idle)
                 # Pass extended events for next/last game context
-                filler_entries = _generate_filler_entries(team, processed_events, days_ahead, team_stats, epg_timezone, extended_processed_events, epg_start_date, espn)
+                filler_entries = _generate_filler_entries(team, processed_events, days_ahead, team_stats, epg_timezone, extended_processed_events, epg_start_date, espn, team.get('api_path', ''))
 
                 # Combine game events and filler entries, then sort by start time
                 combined_events = processed_events + filler_entries
@@ -1515,7 +1515,7 @@ def _find_last_game(current_date: date, game_schedule: dict, game_dates: set) ->
     return None
 
 
-def _generate_filler_entries(team: dict, game_events: List[dict], days_ahead: int, team_stats: dict = None, epg_timezone: str = 'America/New_York', extended_events: List[dict] = None, epg_start_date: date = None, espn_client = None) -> List[dict]:
+def _generate_filler_entries(team: dict, game_events: List[dict], days_ahead: int, team_stats: dict = None, epg_timezone: str = 'America/New_York', extended_events: List[dict] = None, epg_start_date: date = None, espn_client = None, api_path: str = '') -> List[dict]:
     """
     Generate pregame, postgame, and idle EPG entries to fill gaps
 
@@ -1612,7 +1612,7 @@ def _generate_filler_entries(team: dict, game_events: List[dict], days_ahead: in
 
                     pregame_entries = _create_filler_chunks(
                         day_start, first_game_start, max_hours,
-                        team, 'pregame', games_today[0]['event'], team_stats, last_game, epg_timezone, espn_client
+                        team, 'pregame', games_today[0]['event'], team_stats, last_game, epg_timezone, espn_client, api_path
                     )
                     filler_entries.extend(pregame_entries)
 
@@ -1632,7 +1632,7 @@ def _generate_filler_entries(team: dict, game_events: List[dict], days_ahead: in
                         # For postgame, the game we just finished IS the last game
                         postgame_entries = _create_filler_chunks(
                             last_game_end, next_day_end, max_hours,
-                            team, 'postgame', games_today[-1]['event'], team_stats, games_today[-1]['event'], epg_timezone, espn_client
+                            team, 'postgame', games_today[-1]['event'], team_stats, games_today[-1]['event'], epg_timezone, espn_client, api_path
                         )
                         filler_entries.extend(postgame_entries)
                     elif midnight_mode == 'idle':
@@ -1644,7 +1644,7 @@ def _generate_filler_entries(team: dict, game_events: List[dict], days_ahead: in
                             next_game = _find_next_game(next_date, extended_game_schedule or game_schedule, extended_game_dates or game_dates)
                             idle_entries = _create_filler_chunks(
                                 last_game_end, next_day_end, max_hours,
-                                team, 'idle', next_game, team_stats, games_today[-1]['event'], epg_timezone, espn_client
+                                team, 'idle', next_game, team_stats, games_today[-1]['event'], epg_timezone, espn_client, api_path
                             )
                             filler_entries.extend(idle_entries)
                 else:
@@ -1653,7 +1653,7 @@ def _generate_filler_entries(team: dict, game_events: List[dict], days_ahead: in
                         # For postgame, the game we just finished IS the last game
                         postgame_entries = _create_filler_chunks(
                             last_game_end, day_end, max_hours,
-                            team, 'postgame', games_today[-1]['event'], team_stats, games_today[-1]['event'], epg_timezone, espn_client
+                            team, 'postgame', games_today[-1]['event'], team_stats, games_today[-1]['event'], epg_timezone, espn_client, api_path
                         )
                         filler_entries.extend(postgame_entries)
 
@@ -1683,7 +1683,7 @@ def _generate_filler_entries(team: dict, game_events: List[dict], days_ahead: in
                 # Fill entire day with idle content
                 idle_entries = _create_filler_chunks(
                     day_start, day_end, max_hours,
-                    team, 'idle', next_game, team_stats, last_game, epg_timezone, espn_client
+                    team, 'idle', next_game, team_stats, last_game, epg_timezone, espn_client, api_path
                 )
                 filler_entries.extend(idle_entries)
 
@@ -1695,7 +1695,8 @@ def _generate_filler_entries(team: dict, game_events: List[dict], days_ahead: in
 def _create_filler_chunks(start_dt: datetime, end_dt: datetime, max_hours: int,
                           team: dict, filler_type: str, game_event: dict = None,
                           team_stats: dict = None, last_game_event: dict = None,
-                          epg_timezone: str = 'America/New_York', espn_client = None) -> List[dict]:
+                          epg_timezone: str = 'America/New_York', espn_client = None,
+                          api_path: str = '') -> List[dict]:
     """
     Create filler EPG entries, splitting into chunks based on max_hours
 

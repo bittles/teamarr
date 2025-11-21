@@ -591,8 +591,20 @@ def edit_team(team_id):
     else:
         team_dict['description_options'] = []
 
+    # Parse flags - check for None
+    if team_dict.get('flags') is not None:
+        try:
+            team_dict['flags'] = json.loads(team_dict['flags'])
+        except (json.JSONDecodeError, TypeError) as e:
+            print(f"ERROR parsing flags: {e}")
+            print(f"String that failed to parse: {repr(team_dict.get('flags'))}")
+            team_dict['flags'] = {'new': True, 'live': False, 'date': False, 'premiere': False}
+    else:
+        team_dict['flags'] = {'new': True, 'live': False, 'date': False, 'premiere': False}
+
     print(f"Parsed categories (Python list): {team_dict['categories']}")
     print(f"Parsed description_options (Python list): {team_dict['description_options']}")
+    print(f"Parsed flags (Python dict): {team_dict['flags']}")
     print(f"======================\n")
 
     # Pass description_options as both parsed list and JSON string for JavaScript

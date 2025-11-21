@@ -651,6 +651,8 @@ def get_team_templates(team_id):
         'postgame_enabled': team_dict.get('postgame_enabled', True),
         'postgame_title': team_dict.get('postgame_title', ''),
         'postgame_description': team_dict.get('postgame_description', ''),
+        'between_games_title': team_dict.get('between_games_title', ''),
+        'between_games_description': team_dict.get('between_games_description', ''),
     }
 
     return jsonify(template_data)

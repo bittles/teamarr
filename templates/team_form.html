@@ -1111,13 +1111,24 @@ async function applyCopyTemplates() {
 
     try {
         const response = await fetch(`/api/teams/${selectedTeamId}/templates`);
+
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+
         const templates = await response.json();
+
+        if (templates.error) {
+            throw new Error(templates.error);
+        }
 
         selectedFields.forEach(field => {
             if (field === 'description_options') {
                 // Handle conditions separately
                 if (templates.description_options) {
-                    conditions = JSON.parse(templates.description_options);
+                    conditions = typeof templates.description_options === 'string'
+                        ? JSON.parse(templates.description_options)
+                        : templates.description_options;
                     renderConditions();
                 }
             } else {
@@ -1132,14 +1143,10 @@ async function applyCopyTemplates() {
         closeCopyModal();
 
         // Show success feedback
-        const modal = document.getElementById('copyModal');
-        modal.style.background = 'rgba(34, 197, 94, 0.2)';
-        setTimeout(() => {
-            modal.style.background = 'rgba(0,0,0,0.6)';
-        }, 500);
+        alert('Templates copied successfully!');
     } catch (error) {
         console.error('Failed to copy templates:', error);
-        alert('Failed to copy templates. Please try again.');
+        alert(`Failed to copy templates: ${error.message}\n\nPlease check the console for details.`);
     }
 }
 

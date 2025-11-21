@@ -12,8 +12,7 @@ Self-hosted sports EPG generator with support for 13 major leagues (NBA, NFL, ML
 docker run -d \
   --name teamarr \
   -p 9195:9195 \
-  -v ./teamarr-data:/app/database \
-  -v ./teamarr-output:/app/output \
+  -v ./data:/app/data \
   -e TZ=America/New_York \
   ghcr.io/egyptiangio/teamarr:latest
 ```
@@ -29,10 +28,9 @@ services:
     container_name: teamarr
     restart: unless-stopped
     ports:
-      - "9195:9195"
+      - 9195:9195
     volumes:
-      - ./teamarr-data:/app/database
-      - ./teamarr-output:/app/output
+      - ./data:/app/data
     environment:
       - TZ=America/New_York
 ```

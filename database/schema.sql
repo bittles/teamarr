@@ -149,7 +149,7 @@ CREATE TABLE IF NOT EXISTS settings (
     -- EPG Generation Settings
     epg_days_ahead INTEGER DEFAULT 3,       -- How many days of schedule to include
     epg_update_time TEXT DEFAULT '00:00',   -- Daily update time (HH:MM format)
-    epg_output_path TEXT DEFAULT './output/teamarr.xml',
+    epg_output_path TEXT DEFAULT '/app/data/teamarr.xml',
 
     -- ESPN API Settings
     api_base_url TEXT DEFAULT 'https://site.api.espn.com/apis/site/v2/sports',

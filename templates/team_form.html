@@ -1871,7 +1871,7 @@ function generateTemplateVariablesHTML(containerId) {
     for (const [categoryName, categoryData] of Object.entries(TEMPLATE_VARIABLES)) {
         html += `
             <details style="margin-top: ${categoryName === 'Game Basics' ? '1rem' : '0.5rem'};" class="variable-category">
-                <summary style="cursor: pointer; font-weight: bold;">${categoryData.icon} ${categoryName}</summary>
+                <summary style="cursor: pointer; font-weight: bold;">${categoryName}</summary>
                 <div style="display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.5rem;">
         `;
 

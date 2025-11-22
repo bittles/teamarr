@@ -568,7 +568,7 @@ def edit_team(team_id):
                 idle_enabled = ?, idle_title = ?, idle_description = ?,
                 enable_records = ?, enable_streaks = ?, enable_head_to_head = ?,
                 enable_standings = ?, enable_statistics = ?, enable_players = ?,
-                midnight_crossover_mode = ?, max_program_hours = ?
+                midnight_crossover_mode = ?, max_program_hours_mode = ?, max_program_hours = ?
             WHERE id = ?
         """, (
             data['espn_team_id'], data['league'], data['sport'], data['team_name'],
@@ -604,7 +604,8 @@ def edit_team(team_id):
             1 if data.get('enable_statistics') == 'on' else 0,
             1 if data.get('enable_players') == 'on' else 0,
             data.get('midnight_crossover_mode', 'postgame'),
-            float(data.get('max_program_hours', 6.0)),
+            data.get('max_program_hours_mode', 'default'),
+            float(data['max_program_hours']) if data.get('max_program_hours') else None,
             team_id
         ))
 
@@ -1110,7 +1111,7 @@ def generate_epg():
 
                 # Generate filler entries (pregame/postgame/idle)
                 # Pass extended events for next/last game context
-                filler_entries = _generate_filler_entries(team, processed_events, days_ahead, team_stats, epg_timezone, extended_processed_events, epg_start_date, espn, team.get('api_path', ''))
+                filler_entries = _generate_filler_entries(team, processed_events, days_ahead, team_stats, epg_timezone, extended_processed_events, epg_start_date, espn, team.get('api_path', ''), settings)
 
                 # Combine game events and filler entries, then sort by start time
                 combined_events = processed_events + filler_entries
@@ -1229,7 +1230,9 @@ def settings():
                 auto_generate_enabled = ?,
                 auto_generate_frequency = ?,
                 xmltv_generator_name = ?,
-                xmltv_generator_url = ?
+                xmltv_generator_url = ?,
+                game_duration_default = ?,
+                max_program_hours_default = ?
             WHERE id = 1
         """, (
             int(data.get('epg_days_ahead', 14)),
@@ -1241,7 +1244,9 @@ def settings():
             1 if data.get('auto_generate_enabled') == 'on' else 0,
             data.get('auto_generate_frequency', 'daily'),
             data.get('xmltv_generator_name', ''),
-            data.get('xmltv_generator_url', '')
+            data.get('xmltv_generator_url', ''),
+            float(data.get('game_duration_default', 3.0)),
+            float(data.get('max_program_hours_default', 6.0))
         ))
 
         conn.commit()
@@ -1618,7 +1623,7 @@ def _find_last_game(current_date: date, game_schedule: dict, game_dates: set) ->
     return None
 
 
-def _generate_filler_entries(team: dict, game_events: List[dict], days_ahead: int, team_stats: dict = None, epg_timezone: str = 'America/New_York', extended_events: List[dict] = None, epg_start_date: date = None, espn_client = None, api_path: str = '') -> List[dict]:
+def _generate_filler_entries(team: dict, game_events: List[dict], days_ahead: int, team_stats: dict = None, epg_timezone: str = 'America/New_York', extended_events: List[dict] = None, epg_start_date: date = None, espn_client = None, api_path: str = '', settings: dict = None) -> List[dict]:
     """
     Generate pregame, postgame, and idle EPG entries to fill gaps
 
@@ -1631,6 +1636,7 @@ def _generate_filler_entries(team: dict, game_events: List[dict], days_ahead: in
         extended_events: Extended list of game events (beyond EPG window) for next/last game context
         epg_start_date: Start date for EPG generation (defaults to today if not specified)
         espn_client: ESPN API client for fetching opponent stats
+        settings: Global settings (for defaults like max_program_hours_default)
 
     Returns:
         List of filler event dictionaries
@@ -1641,7 +1647,12 @@ def _generate_filler_entries(team: dict, game_events: List[dict], days_ahead: in
     team_tz = ZoneInfo(epg_timezone)
 
     # Get max program hours (for splitting long periods)
-    max_hours = team.get('max_program_hours', 6)
+    # Check mode - use default or custom
+    max_hours_mode = team.get('max_program_hours_mode', 'default')
+    if max_hours_mode == 'default' and settings:
+        max_hours = settings.get('max_program_hours_default', 6.0)
+    else:
+        max_hours = team.get('max_program_hours', 6.0)
 
     # Get midnight crossover mode
     midnight_mode = team.get('midnight_crossover_mode', 'postgame')

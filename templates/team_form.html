@@ -668,9 +668,29 @@
                         <!-- Variable Helper (Collapsible) - Same as Templates tab -->
                         <div id="template-vars-fillers"></div>
                         <div class="form-group">
-                            <label for="max_program_hours">Maximum Program Length (hours)</label>
-                            <input type="number" name="max_program_hours" id="max_program_hours" min="1" max="24" value="{{ team.max_program_hours if team else 6 }}">
-                            <small class="help-text">Long periods will be split into multiple entries</small>
+                            <label>Maximum Program Length</label>
+                            <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+                                <label style="display: flex; align-items: center; gap: 0.5rem;">
+                                    <input type="radio" name="max_program_hours_mode" value="default"
+                                           {% if not team or team.max_program_hours_mode == 'default' %}checked{% endif %}
+                                           onchange="updateMaxProgramHoursMode()">
+                                    <span>Use global default (6.0 hours)</span>
+                                </label>
+                                <label style="display: flex; align-items: center; gap: 0.5rem;">
+                                    <input type="radio" name="max_program_hours_mode" value="custom"
+                                           {% if team and team.max_program_hours_mode == 'custom' %}checked{% endif %}
+                                           onchange="updateMaxProgramHoursMode()">
+                                    <span>Custom:</span>
+                                    <input type="number" name="max_program_hours" id="max_program_hours"
+                                           step="0.5" min="1" max="24"
+                                           value="{{ team.max_program_hours if team and team.max_program_hours else '' }}"
+                                           placeholder="e.g., 6.0"
+                                           {% if not team or team.max_program_hours_mode != 'custom' %}disabled{% endif %}
+                                           style="width: 100px;">
+                                    <span>hours</span>
+                                </label>
+                            </div>
+                            <small class="help-text">Maximum length for any single program. Long periods will be split into multiple entries</small>
                         </div>
 
                         <div class="form-group">
@@ -846,6 +866,9 @@
                     <input type="checkbox" value="game_duration_mode,game_duration_override" checked> Game Duration
                 </label>
                 <label class="field-checkbox-label">
+                    <input type="checkbox" value="max_program_hours_mode,max_program_hours" checked> Max Program Length
+                </label>
+                <label class="field-checkbox-label">
                     <input type="checkbox" value="pregame_enabled" checked> Pregame Enabled
                 </label>
                 <label class="field-checkbox-label">
@@ -930,6 +953,18 @@ let conditionCounter = 0;
 function updateGameDurationMode() {
     const customRadio = document.querySelector('input[name="game_duration_mode"][value="custom"]');
     const input = document.getElementById('game_duration_override');
+
+    if (customRadio && customRadio.checked) {
+        input.disabled = false;
+        input.focus();
+    } else {
+        input.disabled = true;
+    }
+}
+
+function updateMaxProgramHoursMode() {
+    const customRadio = document.querySelector('input[name="max_program_hours_mode"][value="custom"]');
+    const input = document.getElementById('max_program_hours');
 
     if (customRadio && customRadio.checked) {
         input.disabled = false;
@@ -1471,6 +1506,28 @@ async function applyCopyTemplates() {
                         if (overrideInput) {
                             overrideInput.disabled = (mode !== 'custom');
                             overrideInput.value = templates['game_duration_override'] || '';
+                        }
+                    }
+                } else if (field === 'max_program_hours_mode' || field === 'max_program_hours') {
+                    // Handle max program hours mode and override together
+                    const mode = templates['max_program_hours_mode'] || 'default';
+                    const modeRadio = document.querySelector(`input[name="max_program_hours_mode"][value="${mode}"]`);
+                    const overrideInput = document.getElementById('max_program_hours');
+
+                    if (modeRadio) {
+                        modeRadio.checked = true;
+                    }
+
+                    // Set override value if mode is custom
+                    if (mode === 'custom' && templates['max_program_hours']) {
+                        if (overrideInput) {
+                            overrideInput.disabled = false;
+                            overrideInput.value = templates['max_program_hours'];
+                        }
+                    } else {
+                        if (overrideInput) {
+                            overrideInput.disabled = (mode !== 'custom');
+                            overrideInput.value = templates['max_program_hours'] || '';
                         }
                     }
                 } else {

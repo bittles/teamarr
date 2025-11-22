@@ -1440,8 +1440,36 @@ def _enrich_with_scoreboard(events: List[dict], team: dict, espn_client, api_cal
             if 'competitions' in scoreboard_event:
                 event['competitions'] = scoreboard_event['competitions']
 
-                # Check if we got odds and SET THE FLAG ON THE EVENT
+                # Normalize scoreboard broadcast format to match schedule format
+                # Scoreboard API: {'market': 'national', 'names': ['ESPN+']}
+                # Schedule API: {'type': {...}, 'market': {'type': 'National'}, 'media': {'shortName': 'ESPN+'}}
                 comp = scoreboard_event['competitions'][0] if scoreboard_event['competitions'] else {}
+                if 'broadcasts' in comp:
+                    normalized_broadcasts = []
+                    for b in comp['broadcasts']:
+                        if isinstance(b, dict) and 'market' in b and isinstance(b['market'], str):
+                            # This is scoreboard format - normalize it
+                            market_str = b['market']
+                            # Capitalize first letter: 'national' -> 'National', 'home' -> 'Home'
+                            market_type = market_str.capitalize()
+
+                            # Get network name from names array
+                            network_name = b.get('names', [None])[0]
+
+                            # Convert to schedule format
+                            normalized = {
+                                'type': {'id': '1', 'shortName': 'TV'},  # Default to TV
+                                'market': {'type': market_type},
+                                'media': {'shortName': network_name} if network_name else {}
+                            }
+                            normalized_broadcasts.append(normalized)
+                        else:
+                            # Already in schedule format, keep as-is
+                            normalized_broadcasts.append(b)
+
+                    comp['broadcasts'] = normalized_broadcasts
+
+                # Check if we got odds and SET THE FLAG ON THE EVENT
                 has_odds = bool(comp.get('odds'))
                 event['has_odds'] = has_odds  # ← THIS WAS MISSING!
                 print(f"  ✅ Enriched event {event_id}: has_odds={has_odds}")

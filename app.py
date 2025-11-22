@@ -740,6 +740,70 @@ def get_teams_list():
     teams_list = [dict(t) for t in teams]
     return jsonify(teams_list)
 
+@app.route('/api/teams/batch-copy', methods=['POST'])
+def batch_copy_templates():
+    """Copy templates from one team to multiple teams"""
+    data = request.json
+    source_team_id = data.get('source_team_id')
+    target_team_ids = data.get('target_team_ids', [])
+    fields = data.get('fields', [])
+
+    if not source_team_id or not target_team_ids or not fields:
+        return jsonify({'error': 'Missing required parameters'}), 400
+
+    conn = get_connection()
+
+    try:
+        # Get source team templates
+        source_team = conn.execute("SELECT * FROM teams WHERE id = ?", (source_team_id,)).fetchone()
+        if not source_team:
+            return jsonify({'error': 'Source team not found'}), 404
+
+        source_dict = dict(source_team)
+
+        # Parse JSON fields from source
+        if source_dict.get('description_options') and isinstance(source_dict['description_options'], str):
+            source_dict['description_options'] = json.loads(source_dict['description_options'])
+        if source_dict.get('flags') and isinstance(source_dict['flags'], str):
+            source_dict['flags'] = json.loads(source_dict['flags'])
+        if source_dict.get('categories') and isinstance(source_dict['categories'], str):
+            source_dict['categories'] = json.loads(source_dict['categories'])
+
+        # Build UPDATE query dynamically based on selected fields
+        update_parts = []
+        params = []
+
+        for field in fields:
+            if field in source_dict:
+                value = source_dict[field]
+                # Re-serialize JSON fields
+                if field in ['description_options', 'flags', 'categories'] and isinstance(value, (list, dict)):
+                    value = json.dumps(value)
+                update_parts.append(f"{field} = ?")
+                params.append(value)
+
+        if not update_parts:
+            return jsonify({'error': 'No valid fields to copy'}), 400
+
+        # Update each target team
+        updated_count = 0
+        for target_id in target_team_ids:
+            # Check if target team exists
+            target_team = conn.execute("SELECT id FROM teams WHERE id = ?", (target_id,)).fetchone()
+            if target_team:
+                query = f"UPDATE teams SET {', '.join(update_parts)} WHERE id = ?"
+                conn.execute(query, params + [target_id])
+                updated_count += 1
+
+        conn.commit()
+        conn.close()
+
+        return jsonify({'success': True, 'updated_count': updated_count})
+
+    except Exception as e:
+        conn.close()
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/condition-presets', methods=['GET'])
 def get_condition_presets():
     """Get all condition presets from library"""
@@ -2009,6 +2073,9 @@ def _create_filler_chunks(start_dt: datetime, end_dt: datetime, max_hours: int,
             except:
                 pass
 
+    # Build template variables for category resolution in XMLTV
+    template_vars = template_engine.build_variables(context)
+
     # Create chunks
     current_start = start_dt
     for i in range(num_chunks):
@@ -2029,7 +2096,8 @@ def _create_filler_chunks(start_dt: datetime, end_dt: datetime, max_hours: int,
             'subtitle': '',  # No subtitle for filler content
             'description': description,
             'status': 'filler',  # Special status to identify filler content
-            'filler_type': filler_type  # Track the type
+            'filler_type': filler_type,  # Track the type
+            'context': template_vars  # Include template variables for category resolution
         })
 
         current_start = current_end
@@ -2782,6 +2850,9 @@ def _process_event(event: dict, team: dict, team_stats: dict = None, opponent_st
     else:
         status = 'scheduled'
 
+    # Build template variables for category resolution in XMLTV
+    template_vars = template_engine.build_variables(context)
+
     return {
         'start_datetime': game_datetime,
         'end_datetime': end_datetime,
@@ -2789,7 +2860,8 @@ def _process_event(event: dict, team: dict, team_stats: dict = None, opponent_st
         'subtitle': subtitle,
         'description': description,
         'status': status,
-        'game': event  # Preserve raw game data for filler programs
+        'game': event,  # Preserve raw game data for filler programs
+        'context': template_vars  # Include template variables for category resolution
     }
 
 # ============================================================================

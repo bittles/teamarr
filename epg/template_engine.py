@@ -452,6 +452,38 @@ class TemplateEngine:
             # Opponent is home team - use opponent's overall record for home_team_record
             variables['home_team_record'] = variables.get('opponent_record', '0-0')
 
+        # Add explicit next_game and last_game home/away team records
+        next_game = context.get('next_game', {})
+        last_game = context.get('last_game', {})
+
+        # Next game home/away team records
+        if next_game.get('is_home') is not None:
+            if next_game['is_home']:
+                # Next game is home - we are home team
+                variables['next_game_home_team_record'] = variables.get('team_record', '0-0')
+                variables['next_game_away_team_record'] = next_game.get('opponent_record', '0-0')
+            else:
+                # Next game is away - we are away team
+                variables['next_game_away_team_record'] = variables.get('team_record', '0-0')
+                variables['next_game_home_team_record'] = next_game.get('opponent_record', '0-0')
+        else:
+            variables['next_game_home_team_record'] = ''
+            variables['next_game_away_team_record'] = ''
+
+        # Last game home/away team records
+        if last_game.get('is_home') is not None:
+            if last_game['is_home']:
+                # Last game was home - we were home team
+                variables['last_game_home_team_record'] = variables.get('team_record', '0-0')
+                variables['last_game_away_team_record'] = last_game.get('opponent_record', '0-0')
+            else:
+                # Last game was away - we were away team
+                variables['last_game_away_team_record'] = variables.get('team_record', '0-0')
+                variables['last_game_home_team_record'] = last_game.get('opponent_record', '0-0')
+        else:
+            variables['last_game_home_team_record'] = ''
+            variables['last_game_away_team_record'] = ''
+
         # Last 5/10 and recent form calculated in app.py, passed via context
         variables['last_5_record'] = streaks.get('last_5_record', '')
         variables['last_10_record'] = streaks.get('last_10_record', '')

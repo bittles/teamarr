@@ -2074,7 +2074,7 @@ def _create_filler_chunks(start_dt: datetime, end_dt: datetime, max_hours: int,
                 pass
 
     # Build template variables for category resolution in XMLTV
-    template_vars = template_engine.build_variables(context)
+    template_vars = template_engine._build_variable_dict(context)
 
     # Create chunks
     current_start = start_dt
@@ -2851,7 +2851,7 @@ def _process_event(event: dict, team: dict, team_stats: dict = None, opponent_st
         status = 'scheduled'
 
     # Build template variables for category resolution in XMLTV
-    template_vars = template_engine.build_variables(context)
+    template_vars = template_engine._build_variable_dict(context)
 
     return {
         'start_datetime': game_datetime,

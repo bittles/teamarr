@@ -1622,11 +1622,24 @@ def _generate_filler_entries(team: dict, game_events: List[dict], days_ahead: in
             games_today = sorted(game_schedule[current_date], key=lambda x: x['start'])
 
             # PREGAME: Fill from midnight to first game start
+            # Note: If previous day's game crossed into today, the postgame/pregame filler
+            # was already created when processing that day, so we skip pregame here
             if team.get('pregame_enabled', True):
                 first_game_start = games_today[0]['start']
 
-                # Only add pregame if there's a gap
-                if day_start < first_game_start:
+                # Check if previous day's game crossed into today
+                skip_pregame = False
+                prev_date = current_date - timedelta(days=1)
+                if prev_date in game_dates:
+                    prev_games = game_schedule[prev_date]
+                    if prev_games:
+                        last_prev_game = sorted(prev_games, key=lambda x: x['end'])[-1]
+                        if last_prev_game['end'] > day_start:
+                            # Previous game crossed into today - pregame already filled from previous day
+                            skip_pregame = True
+
+                # Only create pregame if not already filled by previous day's midnight crossing
+                if not skip_pregame and day_start < first_game_start:
                     # Find last game before this pregame period (use extended schedule for context)
                     last_game = _find_last_game(current_date, extended_game_schedule or game_schedule, extended_game_dates or game_dates)
 
@@ -1636,41 +1649,52 @@ def _generate_filler_entries(team: dict, game_events: List[dict], days_ahead: in
                     )
                     filler_entries.extend(pregame_entries)
 
-            # POSTGAME: Fill from last game end to midnight
+            # POSTGAME: Fill from last game end to midnight (or next game start if game crosses midnight)
             if team.get('postgame_enabled', True):
                 last_game_end = games_today[-1]['end']
 
                 # Check if game crosses midnight
                 if last_game_end > day_end:
-                    # Game crosses midnight - check next day
+                    # Game crosses midnight - check next day for games
                     next_date = current_date + timedelta(days=1)
 
-                    if midnight_mode == 'postgame':
-                        # Continue postgame coverage into next day
-                        # Fill from game end to next midnight
-                        next_day_end = day_end + timedelta(days=1)
-                        # For postgame, the game we just finished IS the last game
-                        postgame_entries = _create_filler_chunks(
-                            last_game_end, next_day_end, max_hours,
-                            team, 'postgame', games_today[-1]['event'], team_stats, games_today[-1]['event'], epg_timezone, espn_client, api_path
-                        )
-                        filler_entries.extend(postgame_entries)
-                    elif midnight_mode == 'idle':
-                        # Use idle content after game ends (if idle is enabled)
-                        if team.get('idle_enabled', True):
-                            # Fill from game end to next midnight with idle content
-                            next_day_end = day_end + timedelta(days=1)
-                            # Find next game for idle context
-                            next_game = _find_next_game(next_date, extended_game_schedule or game_schedule, extended_game_dates or game_dates)
-                            idle_entries = _create_filler_chunks(
-                                last_game_end, next_day_end, max_hours,
-                                team, 'idle', next_game, team_stats, games_today[-1]['event'], epg_timezone, espn_client, api_path
+                    # Step 1: Check if next day has a game
+                    if next_date in game_dates:
+                        # Next day HAS a game - use PREGAME filler until that game starts (ignore midnight_crossover_mode)
+                        next_day_games = sorted(game_schedule[next_date], key=lambda x: x['start'])
+                        first_next_game_start = next_day_games[0]['start']
+
+                        # Fill with pregame content from game end to next game start
+                        if last_game_end < first_next_game_start:
+                            pregame_entries = _create_filler_chunks(
+                                last_game_end, first_next_game_start, max_hours,
+                                team, 'pregame', next_day_games[0]['event'], team_stats, games_today[-1]['event'], epg_timezone, espn_client, api_path
                             )
-                            filler_entries.extend(idle_entries)
+                            filler_entries.extend(pregame_entries)
+                    else:
+                        # Step 2: No game next day - apply midnight_crossover_mode setting
+                        next_day_end = day_end + timedelta(days=1)
+
+                        if midnight_mode == 'postgame':
+                            # Use postgame filler from game end to next midnight
+                            postgame_entries = _create_filler_chunks(
+                                last_game_end, next_day_end, max_hours,
+                                team, 'postgame', games_today[-1]['event'], team_stats, games_today[-1]['event'], epg_timezone, espn_client, api_path
+                            )
+                            filler_entries.extend(postgame_entries)
+                        elif midnight_mode == 'idle':
+                            # Use idle filler from game end to next midnight (if idle is enabled)
+                            if team.get('idle_enabled', True):
+                                # Find next game for idle context
+                                next_game = _find_next_game(next_date, extended_game_schedule or game_schedule, extended_game_dates or game_dates)
+                                idle_entries = _create_filler_chunks(
+                                    last_game_end, next_day_end, max_hours,
+                                    team, 'idle', next_game, team_stats, games_today[-1]['event'], epg_timezone, espn_client, api_path
+                                )
+                                filler_entries.extend(idle_entries)
                 else:
-                    # Game ends before midnight - fill to midnight
+                    # Game ends before midnight - fill to midnight with postgame
                     if last_game_end < day_end:
-                        # For postgame, the game we just finished IS the last game
                         postgame_entries = _create_filler_chunks(
                             last_game_end, day_end, max_hours,
                             team, 'postgame', games_today[-1]['event'], team_stats, games_today[-1]['event'], epg_timezone, espn_client, api_path

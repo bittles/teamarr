@@ -1,7 +1,7 @@
 {
   "version": "1.0.0",
   "generated": "2025-11-21",
-  "total_variables": 224,
+  "total_variables": 226,
   "variables": [
     {
       "name": "team_name",
@@ -1738,6 +1738,38 @@
       "icon": "⏭️",
       "type": "string",
       "availability": "always",
+      "sports": [
+        "basketball",
+        "football",
+        "hockey",
+        "baseball"
+      ]
+    },
+    {
+      "name": "next_game_date",
+      "description": "Next game date",
+      "source": "next_game context",
+      "example": "November 24, 2025",
+      "category": "⏭️ Next Game",
+      "icon": "⏭️",
+      "type": "string",
+      "availability": "pregame, idle",
+      "sports": [
+        "basketball",
+        "football",
+        "hockey",
+        "baseball"
+      ]
+    },
+    {
+      "name": "next_game_time",
+      "description": "Next game time",
+      "source": "next_game context",
+      "example": "7:00 PM",
+      "category": "⏭️ Next Game",
+      "icon": "⏭️",
+      "type": "string",
+      "availability": "pregame, idle",
       "sports": [
         "basketball",
         "football",

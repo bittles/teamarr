@@ -116,19 +116,20 @@ class EPGOrchestrator:
         # Get settings
         settings = self._get_settings()
 
-        # Smart lookback: Check if any games from the last 6 hours cross midnight
-        # This approach avoids generating 24 hours of retrospective EPG unnecessarily
+        # Smart lookback: Check last 6 hours for any games to determine EPG start time
+        # This avoids generating unnecessary retrospective EPG data
         epg_tz = ZoneInfo(epg_timezone)
-        earliest_crossover = self._check_midnight_crossovers(teams_list, epg_timezone, settings, lookback_hours=6)
+        lookback_hours = 6
+        epg_start_datetime = self._calculate_epg_start_time(teams_list, epg_timezone, settings, lookback_hours)
 
-        if earliest_crossover:
-            # Found a midnight crossover game - start EPG from that game's date
-            epg_start_date = earliest_crossover.date()
-            logger.info(f"EPG will start from {epg_start_date} (midnight crossover game detected)")
+        if epg_start_datetime:
+            # Found recent game - start EPG from that game's start time
+            logger.info(f"EPG will start from {epg_start_datetime.strftime('%Y-%m-%d %H:%M %Z')} (recent game within {lookback_hours} hours)")
         else:
-            # No midnight crossovers - start from today
-            epg_start_date = datetime.now(epg_tz).date()
-            logger.info(f"EPG will start from {epg_start_date} (no midnight crossovers detected)")
+            # No recent games - start from 6 hours ago to catch anything in progress
+            now = datetime.now(epg_tz)
+            epg_start_datetime = now - timedelta(hours=lookback_hours)
+            logger.info(f"EPG will start from {epg_start_datetime.strftime('%Y-%m-%d %H:%M %Z')} ({lookback_hours} hour lookback)")
 
         # Fetch schedules for each team
         all_events = {}
@@ -149,7 +150,7 @@ class EPGOrchestrator:
                     team,
                     days_ahead,
                     epg_timezone,
-                    epg_start_date,
+                    epg_start_datetime,
                     settings
                 )
 
@@ -246,9 +247,9 @@ class EPGOrchestrator:
         finally:
             conn.close()
 
-    def _check_midnight_crossovers(self, teams_list: List[Dict[str, Any]], epg_timezone: str, settings: Dict[str, Any], lookback_hours: int = 6) -> Optional[datetime]:
+    def _calculate_epg_start_time(self, teams_list: List[Dict[str, Any]], epg_timezone: str, settings: Dict[str, Any], lookback_hours: int = 6) -> Optional[datetime]:
         """
-        Check if any games from the last N hours cross midnight in the EPG timezone.
+        Calculate EPG start time by checking for any games in the last N hours.
 
         Args:
             teams_list: List of teams to check
@@ -257,16 +258,15 @@ class EPGOrchestrator:
             lookback_hours: How many hours to look back (default: 6)
 
         Returns:
-            The earliest game start time that crosses midnight, or None if no crossovers found
+            The earliest game start time within the lookback window, or None if no games found
         """
         epg_tz = ZoneInfo(epg_timezone)
         now = datetime.now(epg_tz)
         lookback_cutoff = now - timedelta(hours=lookback_hours)
-        today_midnight = datetime.combine(now.date(), datetime.min.time()).replace(tzinfo=epg_tz)
 
-        earliest_crossover_start = None
+        earliest_game_start = None
 
-        logger.info(f"Checking for midnight crossovers in the last {lookback_hours} hours...")
+        logger.info(f"Checking for games in the last {lookback_hours} hours...")
 
         for team in teams_list:
             # Determine API path
@@ -301,47 +301,42 @@ class EPGOrchestrator:
                     game_start_utc = datetime.fromisoformat(event_date_str.replace('Z', '+00:00'))
                     game_start = game_start_utc.astimezone(epg_tz)
 
-                    # Skip if game started before our lookback window
-                    if game_start < lookback_cutoff:
-                        continue
+                    # Include if game started within our lookback window
+                    if game_start >= lookback_cutoff and game_start <= now:
+                        logger.info(f"Found recent game: {team['team_name']} started at {game_start.strftime('%Y-%m-%d %H:%M %Z')}")
 
-                    # Skip if game started after midnight today (it's a future game)
-                    if game_start >= today_midnight:
-                        continue
-
-                    # Calculate game end time
-                    duration_hours = self._get_game_duration(team, settings)
-                    game_end = game_start + timedelta(hours=duration_hours)
-
-                    # Check if game crosses midnight into today
-                    if game_end > today_midnight:
-                        logger.info(f"Found midnight crossover: {team['team_name']} game starts at {game_start.strftime('%Y-%m-%d %H:%M %Z')}, ends at {game_end.strftime('%Y-%m-%d %H:%M %Z')}")
-
-                        # Track the earliest crossover game start
-                        if earliest_crossover_start is None or game_start < earliest_crossover_start:
-                            earliest_crossover_start = game_start
+                        # Track the earliest game start
+                        if earliest_game_start is None or game_start < earliest_game_start:
+                            earliest_game_start = game_start
 
                 except Exception as e:
-                    logger.warning(f"Error checking event for midnight crossover: {e}")
+                    logger.warning(f"Error checking event: {e}")
                     continue
 
-        if earliest_crossover_start:
-            logger.info(f"Earliest midnight crossover game starts at: {earliest_crossover_start.strftime('%Y-%m-%d %H:%M %Z')}")
+        if earliest_game_start:
+            logger.info(f"Earliest recent game starts at: {earliest_game_start.strftime('%Y-%m-%d %H:%M %Z')}")
         else:
-            logger.info(f"No midnight crossovers found in the last {lookback_hours} hours")
+            logger.info(f"No games found in the last {lookback_hours} hours")
 
-        return earliest_crossover_start
+        return earliest_game_start
 
     def _process_team_schedule(
         self,
         team: Dict[str, Any],
         days_ahead: int,
         epg_timezone: str,
-        epg_start_date: date,
+        epg_start_datetime: datetime,
         settings: Dict[str, Any]
     ) -> List[Dict[str, Any]]:
         """
         Process a single team's schedule: fetch data, process events, generate filler
+
+        Args:
+            team: Team configuration
+            days_ahead: Days to look forward
+            epg_timezone: EPG timezone
+            epg_start_datetime: Start datetime for EPG (synchronized for events and filler)
+            settings: Global settings
 
         Returns:
             List of processed event dicts (games + filler), sorted by start time
@@ -398,8 +393,17 @@ class EPGOrchestrator:
             logger.warning(f"No schedule data for team {team.get('team_name')}")
             return []
 
-        # Parse events (only within EPG window)
-        events = self.espn.parse_schedule_events(schedule_data, days_ahead)
+        # Calculate days_behind from epg_start_datetime to synchronize with filler generation
+        # This ensures events and filler both start from the same point in time
+        epg_tz = ZoneInfo(epg_timezone)
+        now = datetime.now(epg_tz)
+        time_diff = now - epg_start_datetime.astimezone(epg_tz)
+        days_behind = max(0, int(time_diff.total_seconds() / 86400))  # Convert to full days
+
+        logger.debug(f"Parsing events with days_behind={days_behind} based on epg_start_datetime={epg_start_datetime.strftime('%Y-%m-%d %H:%M %Z')}")
+
+        # Parse events (only within EPG window, starting from epg_start_datetime)
+        events = self.espn.parse_schedule_events(schedule_data, days_ahead, days_behind=days_behind)
 
         # Enrich today's games with scoreboard data (odds, conferenceCompetition, etc.)
         api_counter = {'count': self.api_calls}
@@ -470,7 +474,7 @@ class EPGOrchestrator:
             team_stats,
             epg_timezone,
             extended_events,
-            epg_start_date,
+            epg_start_datetime,  # Pass datetime instead of date for precise synchronization
             team.get('api_path', ''),
             settings,
             schedule_data,
@@ -1002,7 +1006,7 @@ class EPGOrchestrator:
         team_stats: dict = None,
         epg_timezone: str = 'America/New_York',
         extended_events: List[dict] = None,
-        epg_start_date: date = None,
+        epg_start_datetime: datetime = None,
         api_path: str = '',
         settings: dict = None,
         schedule_data: dict = None,
@@ -1020,7 +1024,7 @@ class EPGOrchestrator:
             team_stats: Team stats for template resolution
             epg_timezone: Timezone for EPG generation
             extended_events: Extended list of game events (beyond EPG window) for next/last game context
-            epg_start_date: Start date for EPG generation (defaults to today if not specified)
+            epg_start_datetime: Start datetime for EPG generation (defaults to now if not specified)
             api_path: League API path
             settings: Global settings
             schedule_data: Full schedule data for context
@@ -1047,12 +1051,14 @@ class EPGOrchestrator:
         # Get midnight crossover mode from global settings (not per-template)
         midnight_mode = settings.get('midnight_crossover_mode', 'idle') if settings else 'idle'
 
-        # Build date range for EPG window - STRICT cutoff based on days_ahead setting
-        if epg_start_date is None:
+        # Build date range for EPG window - synchronized with event parsing
+        if epg_start_datetime is None:
             now = datetime.now(team_tz)
             start_date = now.date()
         else:
-            start_date = epg_start_date
+            # Convert to team timezone and extract date
+            start_datetime_tz = epg_start_datetime.astimezone(team_tz)
+            start_date = start_datetime_tz.date()
 
         # Calculate end_date based on today + days_ahead (regardless of start_date)
         # This ensures filler coverage matches event filtering which uses now + days_ahead

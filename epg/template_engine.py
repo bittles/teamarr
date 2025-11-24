@@ -629,7 +629,7 @@ class TemplateEngine:
         """
         # Variables that should ONLY have .last suffix (no base, no .next)
         LAST_ONLY_VARS = {
-            'opponent_score', 'overtime_text', 'result', 'result_text', 'result_verb',
+            'final_score', 'opponent_score', 'overtime_text', 'result', 'result_text', 'result_verb',
             'score', 'score_diff', 'score_differential', 'score_differential_text',
             'team_score'
         }

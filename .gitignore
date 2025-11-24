@@ -25,6 +25,9 @@ app.log
 *.swo
 *~
 
+# Claude Code
+.claude.md
+
 # OS
 .DS_Store
 Thumbs.db

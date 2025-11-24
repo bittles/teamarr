@@ -1,8 +1,8 @@
 {
-  "version": "3.0.0",
+  "version": "3.0.1",
   "generated": "2025-11-23",
-  "total_variables": 252,
-  "base_variables": 117,
+  "total_variables": 253,
+  "base_variables": 118,
   "suffix_system": {
     "enabled": true,
     "description": "Optimized suffix system after comprehensive audit - only necessary suffixes are generated",
@@ -32,15 +32,15 @@
         ]
       },
       "base_only": {
-        "count": 36,
+        "count": 37,
         "description": "Team identity and season stats that don't vary by game context",
-        "total_instances": 36,
+        "total_instances": 37,
         "examples": [
           "team_name",
           "team_record",
           "league",
           "head_coach",
-          "team_ppg"
+          "streak_raw"
         ]
       },
       "all_three": {
@@ -551,13 +551,31 @@
     },
     {
       "name": "streak",
-      "description": "Current streak",
-      "source": "Calculated from `/schedule`",
-      "example": "W11",
+      "description": "Current streak count (absolute value for display)",
+      "source": "ESPN `/teams` API - streak_count field",
+      "example": "14",
       "category": "📊 Team Stats",
       "icon": "🔥",
       "type": "string",
       "availability": "always",
+      "notes": "Always positive. Use for display (e.g., '14-game losing streak')",
+      "sports": [
+        "basketball",
+        "football",
+        "hockey",
+        "baseball"
+      ]
+    },
+    {
+      "name": "streak_raw",
+      "description": "Current streak count (signed value for conditional logic)",
+      "source": "ESPN `/teams` API - streak_count field",
+      "example": "-14",
+      "category": "📊 Team Stats",
+      "icon": "🔥",
+      "type": "string",
+      "availability": "always",
+      "notes": "Negative for losses, positive for wins. Use in conditions (e.g., loss_streak >= 10)",
       "sports": [
         "basketball",
         "football",
@@ -567,9 +585,9 @@
     },
     {
       "name": "home_streak",
-      "description": "Home win/loss streak",
+      "description": "Home win/loss streak (formatted with W/L prefix)",
       "source": "Calculated from `/schedule`",
-      "example": "7-0 at home",
+      "example": "W7",
       "category": "📊 Team Stats",
       "icon": "🔥",
       "type": "string",
@@ -583,9 +601,9 @@
     },
     {
       "name": "away_streak",
-      "description": "Away win/loss streak",
+      "description": "Away win/loss streak (formatted with W/L prefix)",
       "source": "Calculated from `/schedule`",
-      "example": "5-0 on road",
+      "example": "L5",
       "category": "📊 Team Stats",
       "icon": "🔥",
       "type": "string",

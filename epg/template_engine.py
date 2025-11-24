@@ -276,7 +276,10 @@ class TemplateEngine:
         streak_type = 'W' if streak_count_raw > 0 else ('L' if streak_count_raw < 0 else '')
 
         # Base streak variables
+        # streak: Absolute value for display (e.g., "7" for 7-game losing streak)
+        # streak_raw: Signed value for conditional logic (e.g., "-7" for losses, "7" for wins)
         variables['streak'] = str(streak_count)
+        variables['streak_raw'] = str(streak_count_raw)
 
         # Home/Away Streaks (calculated in orchestrator, passed as parameter)
         variables['home_streak'] = streaks.get('home_streak', '')

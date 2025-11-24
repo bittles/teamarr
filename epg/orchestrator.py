@@ -930,7 +930,7 @@ class EPGOrchestrator:
         # Get midnight crossover mode from global settings (not per-template)
         midnight_mode = settings.get('midnight_crossover_mode', 'idle') if settings else 'idle'
 
-        # Build date range for EPG window
+        # Build date range for EPG window - STRICT cutoff based on days_ahead setting
         if epg_start_date is None:
             now = datetime.now(team_tz)
             start_date = now.date()

@@ -785,6 +785,45 @@ class TemplateEngine:
 
         return all_variables
 
+    def _normalize_broadcast(self, broadcast) -> dict:
+        """
+        Normalize broadcast to standard dict format.
+        Handles multiple ESPN API broadcast formats:
+        - String: "ESPN", "ABC", etc. (NCAAM, some other sports)
+        - Dict with string market: {"market": "national", "names": ["ESPN"]} (scoreboard format)
+        - Dict with dict market: {"market": {"type": "National"}, "media": {...}} (schedule format)
+
+        Returns:
+            Standardized dict with keys: type, market, media
+        """
+        # Case 1: String broadcast (e.g., "ESPN")
+        if isinstance(broadcast, str):
+            return {
+                'type': {'id': '1', 'shortName': 'TV'},
+                'market': {'type': 'National'},  # Assume national for string broadcasts
+                'media': {'shortName': broadcast}
+            }
+
+        # Case 2: Already a dict
+        if isinstance(broadcast, dict):
+            # Case 2a: Scoreboard format with string market
+            if 'market' in broadcast and isinstance(broadcast['market'], str):
+                market_str = broadcast['market']
+                market_type = market_str.capitalize()  # "national" -> "National"
+                network_name = broadcast.get('names', [None])[0]
+
+                return {
+                    'type': {'id': '1', 'shortName': 'TV'},
+                    'market': {'type': market_type},
+                    'media': {'shortName': network_name} if network_name else {}
+                }
+
+            # Case 2b: Already in schedule format (dict market)
+            return broadcast
+
+        # Case 3: Unknown format - return empty dict
+        return {}
+
     def _get_broadcast_simple(self, broadcasts: List[Dict], team_is_home: bool) -> str:
         """
         Get all broadcast networks in priority order.
@@ -887,9 +926,12 @@ class TemplateEngine:
             'MLS Season Pass'
         ]
 
-        # Filter out radio, subscription packages, and non-dict entries
-        usable = [b for b in broadcasts
-                  if isinstance(b, dict) and
+        # Normalize all broadcasts to standard format
+        normalized = [self._normalize_broadcast(b) for b in broadcasts]
+
+        # Filter out radio, subscription packages, and empty dicts
+        usable = [b for b in normalized
+                  if b and  # Skip empty dicts
                      b.get('type', {}).get('shortName', '').upper() != 'RADIO' and
                      b.get('media', {}).get('shortName', '') not in SKIP_PACKAGES]
 
@@ -949,16 +991,21 @@ class TemplateEngine:
             'MLS Season Pass'
         ]
 
+        # Normalize all broadcasts to standard format
+        normalized = [self._normalize_broadcast(b) for b in broadcasts]
+
         # Filter to National market + TV/Streaming only (no radio, no packages)
-        national = [b for b in broadcasts
-                    if b.get('market', {}).get('type') == 'National' and
+        national = [b for b in normalized
+                    if b and  # Skip empty dicts
+                       b.get('market', {}).get('type') == 'National' and
                        b.get('type', {}).get('shortName', '').upper() != 'RADIO' and
                        b.get('media', {}).get('shortName', '') not in SKIP_PACKAGES]
 
         if not national:
             return ""
 
-        networks = [b.get('media', {}).get('shortName', '') for b in national if b.get('media', {}).get('shortName')]
+        networks = [b.get('media', {}).get('shortName', '') for b in national
+                    if b.get('media', {}).get('shortName')]
 
         # Remove duplicates while preserving order
         seen = set()
@@ -1178,9 +1225,10 @@ class TemplateEngine:
         elif condition_type == 'is_national_broadcast':
             competition = game.get('competitions', [{}])[0]
             broadcasts = competition.get('broadcasts', [])
-            # Check if any broadcast has national market type
+            # Normalize and check if any broadcast has national market type
             for broadcast in broadcasts:
-                market = broadcast.get('market', {})
+                normalized = self._normalize_broadcast(broadcast)
+                market = normalized.get('market', {})
                 if isinstance(market, dict):
                     market_type = market.get('type', '').lower()
                     if market_type == 'national':

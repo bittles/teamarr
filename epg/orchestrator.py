@@ -249,7 +249,8 @@ class EPGOrchestrator:
 
     def _normalize_scoreboard_broadcasts(self, competition: dict) -> dict:
         """
-        Normalize scoreboard broadcast format to match schedule format
+        Normalize scoreboard broadcast format to match schedule format.
+        Uses template engine's _normalize_broadcast() helper to handle all ESPN API formats.
 
         Args:
             competition: Competition dict with broadcasts array
@@ -260,24 +261,11 @@ class EPGOrchestrator:
         if 'broadcasts' not in competition:
             return competition
 
-        normalized_broadcasts = []
-        for b in competition['broadcasts']:
-            if isinstance(b, dict) and 'market' in b and isinstance(b['market'], str):
-                # This is scoreboard format - normalize it
-                market_str = b['market']
-                market_type = market_str.capitalize()
-                network_name = b.get('names', [None])[0]
-
-                # Convert to schedule format
-                normalized = {
-                    'type': {'id': '1', 'shortName': 'TV'},
-                    'market': {'type': market_type},
-                    'media': {'shortName': network_name} if network_name else {}
-                }
-                normalized_broadcasts.append(normalized)
-            else:
-                # Already in schedule format, keep as-is
-                normalized_broadcasts.append(b)
+        # Use template engine's helper to normalize each broadcast
+        normalized_broadcasts = [
+            self.template_engine._normalize_broadcast(b)
+            for b in competition['broadcasts']
+        ]
 
         competition['broadcasts'] = normalized_broadcasts
         return competition

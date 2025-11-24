@@ -245,6 +245,7 @@ function generateChannelId(format) {
         const teamSlug = ''; // We don't have slug yet in add mode
         const espnTeamId = document.getElementById('espn_team_id')?.value || '';
         const league = document.getElementById('league')?.value || '';
+        const leagueName = ''; // Not available in add mode, will use league.upper() as fallback
         const sport = document.getElementById('sport')?.value || '';
     {% else %}
         // For edit mode, use team data from template
@@ -253,6 +254,7 @@ function generateChannelId(format) {
         const teamSlug = '{{ team.team_slug or "" }}';
         const espnTeamId = '{{ team.espn_team_id or "" }}';
         const league = '{{ team.league or "" }}';
+        const leagueName = '{{ team.league_name or "" }}';
         const sport = '{{ team.sport or "" }}';
     {% endif %}
 
@@ -266,7 +268,7 @@ function generateChannelId(format) {
         .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
         .join('');
 
-    // Replace variables in format
+    // Replace variables in format (matching Python logic in template_engine.py)
     let channelId = format
         .replace('{team_name_pascal}', teamNamePascal)
         .replace('{league_id}', league.toLowerCase())
@@ -274,7 +276,7 @@ function generateChannelId(format) {
         .replace('{team_name}', teamName.toLowerCase().replace(/[^a-z0-9]+/g, '-'))
         .replace('{team_slug}', teamSlug || teamName.toLowerCase().replace(/[^a-z0-9]+/g, '-'))
         .replace('{espn_team_id}', espnTeamId)
-        .replace('{league}', league.toUpperCase())
+        .replace('{league}', leagueName || league.toUpperCase())  // Use league_name (NBA) or fallback to league.upper()
         .replace('{sport}', sport.toLowerCase());
 
     // Clean up any remaining special characters (only for old-style formats with dashes)

@@ -209,16 +209,18 @@ def get_template_team_count(template_id: int) -> int:
 # Helper functions for team operations
 
 def get_team(team_id: int) -> Optional[Dict[str, Any]]:
-    """Get team by ID with template information"""
+    """Get team by ID with template and league information"""
     conn = get_connection()
     try:
         cursor = conn.cursor()
         result = cursor.execute("""
             SELECT
                 t.*,
-                tp.name as template_name
+                tp.name as template_name,
+                lc.league_name
             FROM teams t
             LEFT JOIN templates tp ON t.template_id = tp.id
+            LEFT JOIN league_config lc ON t.league = lc.league_code
             WHERE t.id = ?
         """, (team_id,)).fetchone()
         return dict(result) if result else None

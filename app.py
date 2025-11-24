@@ -590,20 +590,39 @@ def teams_bulk_change_channel_id():
 
                 team_dict = dict(team)
 
+                # Generate team_name_pascal (PascalCase): "Detroit Pistons" -> "DetroitPistons"
+                team_name = team_dict.get('team_name', '')
+                team_name_pascal = ''.join(word.capitalize() for word in team_name.split())
+
+                # Get league_name for uppercase league variable
+                league_name_row = cursor.execute(
+                    "SELECT league_name FROM league_config WHERE league_code = ?",
+                    (team_dict.get('league'),)
+                ).fetchone()
+                league_name = league_name_row[0] if league_name_row else team_dict.get('league', '').upper()
+
                 # Generate channel ID from format
                 channel_id = format_template \
+                    .replace('{team_name_pascal}', team_name_pascal) \
                     .replace('{team_abbrev}', (team_dict.get('team_abbrev') or '').lower()) \
-                    .replace('{team_name}', (team_dict.get('team_name') or '').lower().replace(' ', '-')) \
-                    .replace('{team_slug}', team_dict.get('team_slug') or (team_dict.get('team_name') or '').lower().replace(' ', '-')) \
+                    .replace('{team_name}', team_name.lower().replace(' ', '-')) \
+                    .replace('{team_slug}', team_dict.get('team_slug') or team_name.lower().replace(' ', '-')) \
                     .replace('{espn_team_id}', str(team_dict.get('espn_team_id') or '')) \
-                    .replace('{league}', (team_dict.get('league') or '').lower()) \
+                    .replace('{league_id}', (team_dict.get('league') or '').lower()) \
+                    .replace('{league}', league_name) \
                     .replace('{sport}', (team_dict.get('sport') or '').lower())
 
                 # Clean up channel ID (remove special characters, multiple dashes, etc.)
+                # Preserve uppercase if format uses {team_name_pascal} or {league}
                 import re
-                channel_id = re.sub(r'[^a-z0-9.-]+', '-', channel_id)
-                channel_id = re.sub(r'-+', '-', channel_id)
-                channel_id = channel_id.strip('-')
+                if '{team_name_pascal}' in format_template or ('{league}' in format_template and '{league_id}' not in format_template):
+                    # Allow uppercase letters (for PascalCase channel IDs)
+                    channel_id = re.sub(r'[^a-zA-Z0-9.-]+', '', channel_id)
+                else:
+                    # Traditional: lowercase only, replace spaces with dashes
+                    channel_id = re.sub(r'[^a-z0-9.-]+', '-', channel_id)
+                    channel_id = re.sub(r'-+', '-', channel_id)
+                    channel_id = channel_id.strip('-')
 
                 if not channel_id:
                     errors.append(f"Generated empty channel ID for team {team_dict.get('team_name')}")

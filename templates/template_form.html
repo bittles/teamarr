@@ -887,28 +887,8 @@ let sampleDataFromAPI = {};
 let recentlyUsedVars = [];
 let lastTemplateField = null;
 
-// Suffix strategy mapping
-const SUFFIX_STRATEGIES = {
-  'BASE': [
-    'away_record', 'away_streak', 'away_win_pct', 'games_back', 'head_coach',
-    'home_record', 'home_streak', 'home_win_pct', 'is_national_broadcast',
-    'is_playoff', 'is_preseason', 'is_ranked', 'is_ranked_matchup',
-    'is_regular_season', 'last_10_record', 'last_5_record', 'league',
-    'league_name', 'opponent_is_ranked', 'playoff_seed', 'pro_conference',
-    'pro_conference_abbrev', 'pro_division', 'recent_form', 'sport', 'streak',
-    'team_abbrev', 'team_losses', 'team_name', 'team_papg', 'team_ppg',
-    'team_rank', 'team_record', 'team_ties', 'team_win_pct', 'team_wins'
-  ],
-  'LAST': [
-    'opponent_score', 'overtime_text', 'result', 'result_text', 'result_verb',
-    'score', 'score_diff', 'score_differential', 'score_differential_text',
-    'team_score'
-  ],
-  'NEXT': [
-    'odds_details', 'odds_moneyline', 'odds_opponent_moneyline',
-    'odds_opponent_spread', 'odds_over_under', 'odds_provider', 'odds_spread'
-  ]
-};
+// Note: Suffix strategies are now loaded from variables.json via API
+// No more hardcoded arrays - everything uses window.variableSuffixMap
 
 // Sample data for preview
 let sampleData = {
@@ -1148,22 +1128,22 @@ async function loadVariablesFromAPI() {
     }
 }
 
-function getSuffixStrategy(variableName) {
-  if (SUFFIX_STRATEGIES.BASE.includes(variableName)) return 'BASE';
-  if (SUFFIX_STRATEGIES.LAST.includes(variableName)) return 'LAST';
-  if (SUFFIX_STRATEGIES.NEXT.includes(variableName)) return 'NEXT';
-  return 'ALL';
-}
-
 function getSuffixClass(variableName) {
-  const strategy = getSuffixStrategy(variableName);
-  const classes = {
-    'BASE': 'var-base',
-    'LAST': 'var-last',
-    'NEXT': 'var-next',
-    'ALL': 'var-all'
-  };
-  return classes[strategy] || classes['ALL'];
+  // Get available suffixes from API data
+  const suffixes = window.variableSuffixMap?.[variableName] || ['base', 'next', 'last'];
+
+  // Determine CSS class based on available suffixes
+  if (suffixes.length === 1) {
+    if (suffixes[0] === 'base') return 'var-base';
+    if (suffixes[0] === 'last') return 'var-last';
+    if (suffixes[0] === 'next') return 'var-next';
+  } else if (suffixes.length === 2 && suffixes.includes('base') && suffixes.includes('next')) {
+    return 'var-next'; // base+next = odds variables
+  } else if (suffixes.length === 3) {
+    return 'var-all'; // all three contexts
+  }
+
+  return 'var-all'; // default
 }
 
 function generateTemplateVariablesHTML(containerId) {
@@ -1219,6 +1199,11 @@ function generateTemplateVariablesHTML(containerId) {
         categoryData.variables.forEach(varName => {
             const suffixClass = getSuffixClass(varName);
             const suffixes = window.variableSuffixMap?.[varName] || ['base', 'next', 'last'];
+
+            // Debug logging
+            if (varName === 'opponent') {
+                console.log('opponent suffixes:', suffixes, 'length:', suffixes.length);
+            }
 
             // Determine display name and behavior
             let displayName = varName;

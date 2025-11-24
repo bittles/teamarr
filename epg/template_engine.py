@@ -203,11 +203,27 @@ class TemplateEngine:
         # =====================================================================
         # VENUE
         # =====================================================================
+        # ESPN returns venue data in different structures:
+        # - Current/past games: {name: "...", city: "...", state: "..."}
+        # - Future games: {fullName: "...", address: {city: "...", state: "..."}}
 
-        variables['venue'] = venue.get('name', '')
-        variables['venue_city'] = venue.get('city', '')
-        variables['venue_state'] = venue.get('state', '')
-        variables['venue_full'] = f"{venue.get('name', '')}, {venue.get('city', '')}" if venue.get('name') else ''
+        venue_name = venue.get('name') or venue.get('fullName', '')
+
+        # Try top-level city/state first (current games), fall back to address (future games)
+        venue_city = venue.get('city') or venue.get('address', {}).get('city', '')
+        venue_state = venue.get('state') or venue.get('address', {}).get('state', '')
+
+        variables['venue'] = venue_name
+        variables['venue_city'] = venue_city
+        variables['venue_state'] = venue_state
+
+        # Build venue_full: "Stadium Name, City, ST"
+        if venue_name and venue_city and venue_state:
+            variables['venue_full'] = f"{venue_name}, {venue_city}, {venue_state}"
+        elif venue_name and venue_city:
+            variables['venue_full'] = f"{venue_name}, {venue_city}"
+        else:
+            variables['venue_full'] = venue_name
 
         # =====================================================================
         # HOME/AWAY CONTEXT

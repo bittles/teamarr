@@ -1,0 +1,39 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+
+# TeamArr runtime files
+*.db
+*.db-journal
+*.xml
+logs/
+data/
+app.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Documentation (not needed in container)
+*.md
+!README.md
+
+# GitHub
+.github/

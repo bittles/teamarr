@@ -245,9 +245,21 @@ class EPGOrchestrator:
         Returns:
             List of processed event dicts (games + filler), sorted by start time
         """
+        # Determine correct API path (sport/league) for ESPN API calls
+        # Use api_path from league_config if available, otherwise fall back to team's sport/league
+        if team.get('api_path'):
+            # api_path format: "soccer/eng.1" -> split into sport and league
+            api_parts = team['api_path'].split('/', 1)
+            api_sport = api_parts[0]
+            api_league = api_parts[1] if len(api_parts) > 1 else team['league']
+        else:
+            # Fallback to team's direct sport/league fields
+            api_sport = team['sport']
+            api_league = team['league']
+
         # Fetch team stats (record, standings, etc.)
-        team_data = self.espn.get_team_info(team['sport'], team['league'], team['espn_team_id'])
-        team_stats_basic = self.espn.get_team_stats(team['sport'], team['league'], team['espn_team_id'])
+        team_data = self.espn.get_team_info(api_sport, api_league, team['espn_team_id'])
+        team_stats_basic = self.espn.get_team_stats(api_sport, api_league, team['espn_team_id'])
         self.api_calls += 1
 
         # Extract team logo from ESPN data if not already set
@@ -257,7 +269,7 @@ class EPGOrchestrator:
                 team['team_logo_url'] = logos[0].get('href', '')
 
         # Fetch enhanced team stats (streaks, PPG, standings, home/away records)
-        enhanced_stats = self.espn.get_team_stats(team['sport'], team['league'], team['espn_team_id'])
+        enhanced_stats = self.espn.get_team_stats(api_sport, api_league, team['espn_team_id'])
         self.api_calls += 1
 
         # Merge basic and enhanced stats
@@ -265,8 +277,8 @@ class EPGOrchestrator:
 
         # Fetch schedule from ESPN
         schedule_data = self.espn.get_team_schedule(
-            team['sport'],
-            team['league'],
+            api_sport,
+            api_league,
             team['espn_team_id'],
             days_ahead
         )
@@ -274,8 +286,8 @@ class EPGOrchestrator:
 
         # Fetch extended schedule for context (next/last game info beyond EPG window)
         extended_schedule_data = self.espn.get_team_schedule(
-            team['sport'],
-            team['league'],
+            api_sport,
+            api_league,
             team['espn_team_id'],
             30  # Look 30 days ahead for context
         )
@@ -328,7 +340,7 @@ class EPGOrchestrator:
             # Fetch opponent stats if not already in cache
             if opp_id and opp_id not in opponent_stats_cache:
                 # Fetch enhanced opponent stats
-                opp_enhanced = self.espn.get_team_stats(team['sport'], team['league'], opp_id)
+                opp_enhanced = self.espn.get_team_stats(api_sport, api_league, opp_id)
                 self.api_calls += 1
                 opponent_stats_cache[opp_id] = opp_enhanced
 
@@ -387,6 +399,15 @@ class EPGOrchestrator:
         Returns:
             List of enriched events (today's games have scoreboard data merged)
         """
+        # Determine correct API path (sport/league) for ESPN API calls
+        if team.get('api_path'):
+            api_parts = team['api_path'].split('/', 1)
+            api_sport = api_parts[0]
+            api_league = api_parts[1] if len(api_parts) > 1 else team['league']
+        else:
+            api_sport = team['sport']
+            api_league = team['league']
+
         # Get today's date string in USER'S timezone (not UTC!)
         user_tz = ZoneInfo(epg_timezone)
         today_str = datetime.now(user_tz).strftime('%Y%m%d')
@@ -414,7 +435,7 @@ class EPGOrchestrator:
 
         # Fetch scoreboard for today
         logger.info(f"Fetching scoreboard for {team.get('team_name', 'team')} (today: {today_str} in {epg_timezone})")
-        scoreboard_data = self.espn.get_scoreboard(team['sport'], team['league'], today_str)
+        scoreboard_data = self.espn.get_scoreboard(api_sport, api_league, today_str)
         api_calls_counter['count'] += 1
 
         if not scoreboard_data or 'events' not in scoreboard_data:
@@ -498,6 +519,15 @@ class EPGOrchestrator:
         Returns:
             List of events with scores updated
         """
+        # Determine correct API path (sport/league) for ESPN API calls
+        if team.get('api_path'):
+            api_parts = team['api_path'].split('/', 1)
+            api_sport = api_parts[0]
+            api_league = api_parts[1] if len(api_parts) > 1 else team['league']
+        else:
+            api_sport = team['sport']
+            api_league = team['league']
+
         now_utc = datetime.now(ZoneInfo('UTC'))
 
         # Filter to past events using the 'date' string field
@@ -528,7 +558,7 @@ class EPGOrchestrator:
 
         # Fetch scoreboards for last 7 days (to control API calls)
         for date_str in sorted(past_by_date.keys(), reverse=True)[:7]:
-            scoreboard = self.espn.get_scoreboard(team['sport'], team['league'], date_str)
+            scoreboard = self.espn.get_scoreboard(api_sport, api_league, date_str)
             self.api_calls += 1
 
             if scoreboard and 'events' in scoreboard:
@@ -588,6 +618,15 @@ class EPGOrchestrator:
         Returns:
             Dictionary with all context data populated
         """
+        # Determine correct API path (sport/league) for ESPN API calls
+        if team.get('api_path'):
+            api_parts = team['api_path'].split('/', 1)
+            api_sport = api_parts[0]
+            api_league = api_parts[1] if len(api_parts) > 1 else team['league']
+        else:
+            api_sport = team['sport']
+            api_league = team['league']
+
         if not event:
             return {
                 'game': None,
@@ -613,11 +652,11 @@ class EPGOrchestrator:
 
         # Fetch opponent stats
         opponent_stats = {}
-        if opponent_id and team.get('sport') and team.get('league'):
+        if opponent_id and api_sport and api_league:
             try:
                 opponent_stats = self.espn.get_team_stats(
-                    team.get('sport'),
-                    team.get('league'),
+                    api_sport,
+                    api_league,
                     opponent_id
                 ) or {}
                 self.api_calls += 1

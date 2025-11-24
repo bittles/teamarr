@@ -896,14 +896,16 @@ document.addEventListener('DOMContentLoaded', async function() {
 
     // Load variables from API first
     try {
-        await loadVariablesFromAPI();
-        // Merge API sample data with fallback
-        sampleData = { ...sampleDataFromAPI, ...sampleData };
+        const success = await loadVariablesFromAPI();
+        if (success) {
+            // Merge API sample data with fallback
+            sampleData = { ...sampleDataFromAPI, ...sampleData };
+        }
     } catch (error) {
         console.error('Failed to load variables:', error);
     }
 
-    // Initialize remaining UI components
+    // Initialize remaining UI components (after variables load)
     initTemplateVariables();
     initTemplatePreview();
     initFallbackDescriptions();
@@ -1106,6 +1108,11 @@ function getSuffixClass(variableName) {
 
 function generateTemplateVariablesHTML(containerId) {
     const baseVarCount = Object.keys(sampleDataFromAPI).length;
+
+    // If no variables loaded, show loading message
+    if (Object.keys(TEMPLATE_VARIABLES).length === 0) {
+        return '<div class="variable-helper"><p style="color: var(--text-muted); padding: 1rem;">Loading variables...</p></div>';
+    }
 
     let html = `
         <div class="variable-helper">

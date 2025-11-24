@@ -78,7 +78,7 @@ class EPGOrchestrator:
 
         return normalized
 
-    def generate_epg(self, days_ahead: int = 14, epg_timezone: str = 'America/New_York', settings: dict = None) -> Dict[str, Any]:
+    def generate_epg(self, days_ahead: int = 14, epg_timezone: str = 'America/New_York', settings: dict = None, progress_callback=None) -> Dict[str, Any]:
         """
         Generate complete EPG data for all active teams with templates
 
@@ -86,6 +86,7 @@ class EPGOrchestrator:
             days_ahead: Number of days to generate EPG for
             epg_timezone: Timezone for EPG generation
             settings: Global settings dict (includes midnight_crossover_mode, etc.)
+            progress_callback: Optional callback function(current, total, team_name, message) for progress updates
 
         Returns:
             Dict with:
@@ -122,11 +123,16 @@ class EPGOrchestrator:
 
         # Fetch schedules for each team
         all_events = {}
+        total_teams = len(teams_list)
 
-        for team in teams_list:
+        for idx, team in enumerate(teams_list, 1):
             team_id = str(team['id'])
             team_name = team.get('team_name', 'Unknown')
             logger.info(f"Processing team: {team_name} (ID: {team_id})")
+
+            # Report progress
+            if progress_callback:
+                progress_callback(idx, total_teams, team_name, f"Processing {team_name}...")
 
             try:
                 # Process this team's schedule

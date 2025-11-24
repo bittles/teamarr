@@ -912,6 +912,142 @@ def generate_epg():
             return redirect(url_for('epg_management'))
         return redirect(url_for('index'))
 
+@app.route('/generate/stream')
+def generate_epg_stream():
+    """Stream EPG generation progress using Server-Sent Events"""
+    import threading
+    import queue
+    import time
+
+    def generate():
+        """Generator function for SSE stream"""
+        progress_queue = queue.Queue()
+
+        try:
+            # Get settings
+            conn = get_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM settings WHERE id = 1")
+            settings_row = cursor.fetchone()
+            conn.close()
+
+            if not settings_row:
+                yield f"data: {json.dumps({'status': 'error', 'message': 'Settings not configured'})}\n\n"
+                return
+
+            settings = dict(settings_row)
+            days_ahead = settings.get('epg_days_ahead', 14)
+            epg_timezone = settings.get('default_timezone', 'America/New_York')
+
+            # Send initial progress
+            yield f"data: {json.dumps({'status': 'starting', 'message': 'Initializing EPG generation...'})}\n\n"
+
+            # Progress callback that puts updates in queue
+            def progress_callback(current, total, team_name, message):
+                progress_data = {
+                    'status': 'progress',
+                    'current': current,
+                    'total': total,
+                    'team_name': team_name,
+                    'message': message,
+                    'percent': int((current / total) * 100) if total > 0 else 0
+                }
+                progress_queue.put(progress_data)
+
+            # Run EPG generation in background thread
+            result_container = {'result': None, 'error': None}
+
+            def run_generation():
+                try:
+                    result_container['result'] = epg_orchestrator.generate_epg(
+                        days_ahead=days_ahead,
+                        epg_timezone=epg_timezone,
+                        settings=settings,
+                        progress_callback=progress_callback
+                    )
+                except Exception as e:
+                    result_container['error'] = e
+                finally:
+                    progress_queue.put({'status': 'generation_done'})
+
+            # Start generation thread
+            generation_thread = threading.Thread(target=run_generation)
+            generation_thread.start()
+
+            # Stream progress updates
+            while True:
+                try:
+                    progress_data = progress_queue.get(timeout=0.1)
+
+                    if progress_data.get('status') == 'generation_done':
+                        break
+
+                    yield f"data: {json.dumps(progress_data)}\n\n"
+                except queue.Empty:
+                    # Send heartbeat to keep connection alive
+                    yield f": heartbeat\n\n"
+
+            # Wait for thread to complete
+            generation_thread.join()
+
+            # Check for errors
+            if result_container['error']:
+                raise result_container['error']
+
+            result = result_container['result']
+
+            if not result or not result['teams_list']:
+                yield f"data: {json.dumps({'status': 'error', 'message': 'No active teams with templates configured'})}\n\n"
+                return
+
+            # Generate XMLTV
+            yield f"data: {json.dumps({'status': 'finalizing', 'message': 'Generating XMLTV file...'})}\n\n"
+
+            xml_content = xmltv_generator.generate(
+                result['teams_list'],
+                result['all_events'],
+                settings
+            )
+
+            # Save to file
+            output_path = settings.get('epg_output_path', '/app/data/teamarr.xml')
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+            with open(output_path, 'w', encoding='utf-8') as f:
+                f.write(xml_content)
+
+            # Log to history
+            conn = get_connection()
+            file_size = os.path.getsize(output_path)
+            file_hash = xmltv_generator.calculate_file_hash(xml_content)
+            generation_time = result['stats'].get('generation_time', 0)
+            total_programmes = result['stats'].get('num_programmes', 0)
+            total_events = result['stats'].get('num_events', 0)
+
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO epg_history (
+                    file_path, file_size, num_channels, num_programmes, num_events,
+                    generation_time_seconds, api_calls_made, file_hash, status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                output_path, file_size, len(result['teams_list']), total_programmes, total_events,
+                generation_time, result.get('api_calls', 0), file_hash, 'success'
+            ))
+            conn.commit()
+            conn.close()
+
+            yield f"data: {json.dumps({'status': 'complete', 'message': f'EPG generated successfully! {total_programmes} programmes in {generation_time:.2f}s', 'programmes': total_programmes, 'time': f'{generation_time:.2f}s'})}\n\n"
+
+        except Exception as e:
+            app.logger.error(f"Error in EPG stream: {e}", exc_info=True)
+            yield f"data: {json.dumps({'status': 'error', 'message': str(e)})}\n\n"
+
+    return Response(generate(), mimetype='text/event-stream', headers={
+        'Cache-Control': 'no-cache',
+        'X-Accel-Buffering': 'no'
+    })
+
 @app.route('/download')
 def download_epg():
     """Download generated EPG file"""

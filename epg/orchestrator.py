@@ -976,24 +976,8 @@ class EPGOrchestrator:
             'player_leaders': {}
         }
 
-        # Find LAST game (relative to this event's date, not real-world date)
-        last_event = None
-        if extended_events:
-            # Find most recent completed game before this event's date
-            for ext_event in reversed(extended_events):
-                ext_date_str = ext_event.get('date')
-                ext_status = ext_event.get('status', {})
-                is_completed = ext_status.get('completed', False) or ext_status.get('state') == 'post'
-
-                if ext_date_str and is_completed:
-                    try:
-                        ext_datetime = datetime.fromisoformat(ext_date_str.replace('Z', '+00:00'))
-                        ext_date = ext_datetime.astimezone(ZoneInfo(epg_timezone)).date()
-                        if ext_date < program_date:
-                            last_event = ext_event
-                            break
-                    except:
-                        continue
+        # Find LAST game (most recent completed/final game)
+        last_event = self._find_last_completed_game(extended_events or [])
 
         # Build LAST game context
         last_context = self._build_full_game_context(
@@ -1220,11 +1204,11 @@ class EPGOrchestrator:
 
                     # Only create pregame if not already filled by previous day's midnight crossing
                     if not skip_pregame and day_start < first_game_start:
-                        # Find last game before this pregame period
-                        last_game = self._find_last_game(
-                            current_date,
-                            extended_game_schedule or game_schedule,
-                            extended_game_dates or game_dates
+                        # Find most recent completed/final game
+                        last_game = self._find_last_completed_game(
+                            game_schedule=extended_game_schedule or game_schedule,
+                            game_dates=extended_game_dates or game_dates,
+                            current_date=current_date
                         )
 
                         # Enrich last game with scoreboard data to get final scores
@@ -1315,11 +1299,11 @@ class EPGOrchestrator:
                         extended_game_dates or game_dates
                     )
 
-                    # Find last game before current_date
-                    last_game = self._find_last_game(
-                        current_date,
-                        extended_game_schedule or game_schedule,
-                        extended_game_dates or game_dates
+                    # Find most recent completed/final game
+                    last_game = self._find_last_completed_game(
+                        game_schedule=extended_game_schedule or game_schedule,
+                        game_dates=extended_game_dates or game_dates,
+                        current_date=current_date
                     )
 
                     # Enrich last game with scoreboard data to get final scores
@@ -1544,15 +1528,61 @@ class EPGOrchestrator:
                     return sorted(future_games, key=lambda x: x['start'])[0]['event']
         return None
 
-    def _find_last_game(self, current_date: date, game_schedule: dict, game_dates: set) -> Optional[dict]:
-        """Find the most recent game before the given date"""
-        for past_date in sorted(game_dates, reverse=True):
-            if past_date < current_date:
-                past_games = game_schedule[past_date]
-                if past_games:
-                    # Return the latest game on that date
-                    return sorted(past_games, key=lambda x: x['end'])[-1]['event']
-        return None
+    def _find_last_completed_game(self, events: List[dict] = None,
+                                     game_schedule: dict = None, game_dates: set = None,
+                                     current_date: date = None) -> Optional[dict]:
+        """
+        Find the most recent completed/final game.
+
+        Only returns games marked as completed/final by ESPN. Games that haven't
+        finished yet (scheduled, in-progress) are automatically excluded.
+
+        Args:
+            events: List of raw event dicts (with 'date' ISO string and 'status' fields)
+            game_schedule: Alternative input - dict keyed by date with game entries
+            game_dates: Required if using game_schedule - set of dates with games
+            current_date: Required if using game_schedule - search this date and earlier
+
+        Returns:
+            Most recent completed event, or None
+        """
+        # If game_schedule provided, flatten it to events list
+        if events is None and game_schedule is not None:
+            events = []
+            for game_date in (game_dates or []):
+                if current_date is None or game_date <= current_date:
+                    for game_entry in game_schedule.get(game_date, []):
+                        event = game_entry.get('event', {})
+                        if event:
+                            events.append(event)
+
+        if not events:
+            return None
+
+        completed_games = []
+
+        for event in events:
+            status = event.get('status', {})
+            is_completed = status.get('completed', False) or status.get('state') == 'post'
+
+            if not is_completed:
+                continue
+
+            event_date_str = event.get('date', '')
+            if not event_date_str:
+                continue
+
+            try:
+                event_datetime = datetime.fromisoformat(event_date_str.replace('Z', '+00:00'))
+                completed_games.append((event_datetime, event))
+            except:
+                continue
+
+        if not completed_games:
+            return None
+
+        # Return the most recent one (latest start time)
+        return max(completed_games, key=lambda x: x[0])[1]
 
     def _enrich_last_game_with_score(self, last_game: Optional[dict], api_sport: str, api_league: str,
                                       api_calls_counter: dict, epg_timezone: str = 'America/New_York') -> Optional[dict]:

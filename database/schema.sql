@@ -191,7 +191,7 @@ CREATE TABLE IF NOT EXISTS settings (
 
     -- Channel ID Format (template for auto-generating channel IDs)
     -- Available variables: {team_name_pascal}, {team_abbrev}, {team_name}, {team_slug}, {espn_team_id}, {league_id}, {league}, {sport}
-    default_channel_id_format TEXT DEFAULT '{team_abbrev}.{league_id}',
+    default_channel_id_format TEXT DEFAULT '{team_name_pascal}.{league_id}',
 
     -- Midnight Crossover Mode (how to handle filler when game crosses midnight)
     midnight_crossover_mode TEXT DEFAULT 'idle',  -- 'postgame' or 'idle'

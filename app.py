@@ -1314,7 +1314,7 @@ def api_parse_espn_url():
         settings = conn.execute("SELECT default_channel_id_format FROM settings WHERE id = 1").fetchone()
         conn.close()
 
-        channel_id_format = settings['default_channel_id_format'] if settings else '{team_abbrev}.{league}'
+        channel_id_format = settings['default_channel_id_format'] if settings else '{team_name_pascal}.{league_id}'
 
         # Generate suggested channel ID
         team_data['channel_id'] = _generate_channel_id(
@@ -1593,7 +1593,7 @@ def api_teams_bulk_import():
         settings = conn.execute("SELECT default_channel_id_format FROM settings WHERE id = 1").fetchone()
         conn.close()
 
-        channel_id_format = settings['default_channel_id_format'] if settings else '{team_abbrev}.{league}'
+        channel_id_format = settings['default_channel_id_format'] if settings else '{team_name_pascal}.{league_id}'
 
         imported_count = 0
         skipped_count = 0
@@ -1840,12 +1840,18 @@ def _generate_channel_id(format_template, **kwargs):
     for placeholder, value in replacements.items():
         channel_id = channel_id.replace(placeholder, str(value))
 
-    # Clean up the channel ID (lowercase, remove special chars)
-    channel_id = channel_id.lower()
-    channel_id = channel_id.replace("'", "")
-    # Remove any other problematic characters except alphanumeric, dots, and dashes
+    # Clean up channel ID - conditionally preserve case for PascalCase formats
     import re
-    channel_id = re.sub(r'[^a-z0-9.-]', '', channel_id)
+    channel_id = channel_id.replace("'", "")
+    if '{team_name_pascal}' in format_template or ('{league}' in format_template and '{league_id}' not in format_template):
+        # Allow uppercase letters (for PascalCase channel IDs)
+        channel_id = re.sub(r'[^a-zA-Z0-9.-]+', '', channel_id)
+    else:
+        # Traditional: lowercase only
+        channel_id = channel_id.lower()
+        channel_id = re.sub(r'[^a-z0-9.-]+', '-', channel_id)
+        channel_id = re.sub(r'-+', '-', channel_id)
+        channel_id = channel_id.strip('-')
 
     return channel_id
 

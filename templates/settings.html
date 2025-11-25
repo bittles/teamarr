@@ -62,9 +62,9 @@
             <div class="form-group">
                 <label for="default_channel_id_format">Default Channel ID Format</label>
                 <input type="text" id="default_channel_id_format" name="default_channel_id_format" class="form-control"
-                       value="{{ settings.default_channel_id_format if settings.default_channel_id_format else '{team_abbrev}.{league_id}' }}"
-                       placeholder="{team_abbrev}.{league_id}">
-                <small class="form-help">Default: {team_abbrev}.{league_id} (det.nba)</small>
+                       value="{{ settings.default_channel_id_format if settings.default_channel_id_format else '{team_name_pascal}.{league_id}' }}"
+                       placeholder="{team_name_pascal}.{league_id}">
+                <small class="form-help">Default: {team_name_pascal}.{league_id} (e.g. DetroitPistons.nba)</small>
                 <small class="form-help">Available variables: {team_name_pascal}, {team_abbrev}, {team_name}, {team_slug}, {espn_team_id}, {league_id}, {league}, {sport}</small>
             </div>
         </div>

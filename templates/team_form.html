@@ -64,7 +64,7 @@
                         <input type="checkbox" id="use_default_channel_id" {% if not team %}checked{% endif %} onchange="toggleChannelIdMode()">
                         <span>Use Global Default Format</span>
                     </label>
-                    <small class="form-help">Format: <code>{{ settings.default_channel_id_format or '{team_abbrev}.{league_id}' }}</code><br>
+                    <small class="form-help">Current: <code>{{ settings.default_channel_id_format or '{team_name_pascal}.{league_id}' }}</code><br>
                     Available variables: <code>{team_name_pascal}</code>, <code>{team_abbrev}</code>, <code>{team_name}</code>, <code>{team_slug}</code>, <code>{espn_team_id}</code>, <code>{league_id}</code>, <code>{league}</code>, <code>{sport}</code></small>
                 </div>
                 <div id="channel_id_preview" style="display: none; margin-bottom: 0.75rem;">
@@ -76,8 +76,13 @@
                 <div id="channel_id_custom_container">
                     <input type="text" id="channel_id" name="channel_id" class="form-control" required
                            value="{{ team.channel_id if team else '' }}"
-                           placeholder="detroit-pistons">
-                    <small class="form-help">Unique channel identifier (lowercase, no spaces)</small>
+                           placeholder="DetroitPistons.nba or {team_name_pascal}.{league_id}"
+                           oninput="updateCustomChannelPreview()">
+                    <small class="form-help">Enter a channel ID directly or use variables (they will be translated)</small>
+                    <div id="custom_channel_preview" style="display: none; margin-top: 0.5rem;">
+                        <small style="color: var(--text-muted);">Preview: </small>
+                        <code id="custom_channel_preview_text" style="color: var(--primary);"></code>
+                    </div>
                 </div>
             </div>
 
@@ -227,7 +232,7 @@ function toggleChannelIdMode() {
 }
 
 function updateChannelIdPreview() {
-    const format = '{{ settings.default_channel_id_format or "{team_abbrev}.{league_id}" }}';
+    const format = '{{ settings.default_channel_id_format or "{team_name_pascal}.{league_id}" }}';
     const channelId = generateChannelId(format);
     document.getElementById('channel_id_preview_text').textContent = channelId || '(Parse ESPN URL to see preview)';
 
@@ -290,6 +295,35 @@ function generateChannelId(format) {
 
     return channelId;
 }
+
+function updateCustomChannelPreview() {
+    const input = document.getElementById('channel_id').value;
+    const previewDiv = document.getElementById('custom_channel_preview');
+    const previewText = document.getElementById('custom_channel_preview_text');
+
+    // Check if input contains any variables
+    if (input.includes('{') && input.includes('}')) {
+        // Translate vars and show preview
+        const translated = generateChannelId(input);
+        previewDiv.style.display = 'block';
+        previewText.textContent = translated || '(Parse ESPN URL to see preview)';
+    } else {
+        // No vars, hide preview
+        previewDiv.style.display = 'none';
+    }
+}
+
+// Translate vars in channel_id before form submission
+document.querySelector('form').addEventListener('submit', function(e) {
+    if (!document.getElementById('use_default_channel_id').checked) {
+        const channelIdInput = document.getElementById('channel_id');
+        const value = channelIdInput.value;
+        // If the input contains variables, translate them
+        if (value.includes('{') && value.includes('}')) {
+            channelIdInput.value = generateChannelId(value);
+        }
+    }
+});
 </script>
 
 <style>

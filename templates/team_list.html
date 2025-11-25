@@ -981,7 +981,7 @@ code {
                     <input type="radio" name="channel_id_mode" value="default" checked onchange="toggleChannelIdModeModal()">
                     <span>Use Global Default Format</span>
                 </label>
-                <small class="form-help" style="margin-left: 1.5rem;">Format: <code id="modal-default-format">{{ settings.default_channel_id_format or '{team_abbrev}.{league}' }}</code></small>
+                <small class="form-help" style="margin-left: 1.5rem;">Current: <code id="modal-default-format">{{ settings.default_channel_id_format or '{team_name_pascal}.{league_id}' }}</code></small>
             </div>
 
             <div class="form-group" style="margin-bottom: 1.5rem;">
@@ -994,7 +994,7 @@ code {
             <div id="custom-format-container" style="display: none; margin-top: 1rem;">
                 <div class="form-group">
                     <label for="modal-custom-format">Custom Channel ID Format</label>
-                    <input type="text" id="modal-custom-format" class="form-control" placeholder="{team_abbrev}.{league_id}">
+                    <input type="text" id="modal-custom-format" class="form-control" placeholder="{team_name_pascal}.{league_id}">
                     <small class="form-help">Available variables: {team_name_pascal}, {team_abbrev}, {team_name}, {team_slug}, {espn_team_id}, {league_id}, {league}, {sport}</small>
                 </div>
             </div>

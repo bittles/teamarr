@@ -1073,7 +1073,21 @@ function updatePreviews() {
 function replaceVariables(template) {
     let result = template;
     for (const [key, value] of Object.entries(sampleData)) {
-        result = result.replace(new RegExp(`\\{${key}\\}`, 'g'), value);
+        // Get available suffixes for this variable
+        const suffixes = window.variableSuffixMap?.[key] || ['base', 'next', 'last'];
+
+        // Replace base variable {var} if base suffix is available
+        if (suffixes.includes('base')) {
+            result = result.replace(new RegExp(`\\{${key}\\}`, 'g'), value);
+        }
+        // Replace {var.next} if next suffix is available
+        if (suffixes.includes('next')) {
+            result = result.replace(new RegExp(`\\{${key}\\.next\\}`, 'g'), value);
+        }
+        // Replace {var.last} if last suffix is available
+        if (suffixes.includes('last')) {
+            result = result.replace(new RegExp(`\\{${key}\\.last\\}`, 'g'), value);
+        }
     }
     return result;
 }

@@ -800,13 +800,13 @@
         "base"
       ],
       "examples_by_sport": {
-        "NBA": "W12",
-        "NFL": "W7",
-        "MLB": "W3",
-        "NHL": "W2",
-        "NCAAM": "W4",
-        "NCAAF": "W5",
-        "Soccer": "W4"
+        "NBA": "12",
+        "NFL": "7",
+        "MLB": "3",
+        "NHL": "2",
+        "NCAAM": "4",
+        "NCAAF": "5",
+        "Soccer": "4"
       }
     },
     {

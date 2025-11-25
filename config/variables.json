@@ -6,7 +6,7 @@
   "suffix_system": {
     "enabled": true,
     "description": "Optimized suffix system after comprehensive audit - only necessary suffixes are generated",
-    "total_with_suffixes": 276,
+    "total_with_suffixes": 282,
     "audit_summary": {
       "last_only": {
         "count": 11,
@@ -33,9 +33,9 @@
         ]
       },
       "base_only": {
-        "count": 39,
+        "count": 36,
         "description": "Team identity and season stats that don't vary by game context",
-        "total_instances": 39,
+        "total_instances": 36,
         "examples": [
           "team_name",
           "team_record",
@@ -45,9 +45,9 @@
         ]
       },
       "all_three": {
-        "count": 66,
+        "count": 69,
         "description": "Game-specific variables that vary across contexts",
-        "total_instances": 198,
+        "total_instances": 207,
         "examples": [
           "opponent",
           "game_date",
@@ -1881,7 +1881,9 @@
         "baseball"
       ],
       "available_suffixes": [
-        "base"
+        "base",
+        "next",
+        "last"
       ],
       "examples_by_sport": {
         "NBA": "Detroit",
@@ -1908,7 +1910,9 @@
         "baseball"
       ],
       "available_suffixes": [
-        "base"
+        "base",
+        "next",
+        "last"
       ],
       "examples_by_sport": {
         "NBA": "MI",
@@ -1935,7 +1939,9 @@
         "baseball"
       ],
       "available_suffixes": [
-        "base"
+        "base",
+        "next",
+        "last"
       ],
       "examples_by_sport": {
         "NBA": "Little Caesars Arena, Detroit, MI",
@@ -3951,7 +3957,7 @@
     }
   ],
   "base_variables_count": 113,
-  "total_variables_count": 234,
+  "total_variables_count": 240,
   "examples_by_sport_info": {
     "description": "Each variable has sport-specific example values representing realistic scenarios",
     "sports": [

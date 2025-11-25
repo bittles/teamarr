@@ -1424,9 +1424,9 @@ class EPGOrchestrator:
         # Description template - check for conditional mode (postgame/idle only)
         desc_template = team.get(f'{filler_type}_description', '')
         if filler_type in ['postgame', 'idle'] and team.get(f'{filler_type}_conditional_enabled'):
-            # Check if last game is final
+            # Check if last game is final (consistent with template_engine logic)
             last_game_status = (last_game_event or {}).get('status', {})
-            is_last_game_final = last_game_status.get('completed', False)
+            is_last_game_final = last_game_status.get('name', '') in ['STATUS_FINAL', 'Final']
 
             if is_last_game_final:
                 desc_template = team.get(f'{filler_type}_description_final', desc_template)

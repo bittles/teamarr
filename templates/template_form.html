@@ -717,7 +717,7 @@
                                 <span id="preview-postgame-subtitle"></span>
                             </div>
                         </div>
-                        <div class="form-group">
+                        <div class="form-group" id="postgame-description-group">
                             <label for="postgame_description">Description</label>
                             <input type="text" name="postgame_description" id="postgame_description" value="{{ template.postgame_description if template else '{team_name} {result_text.last} the {opponent.last} {final_score.last} {overtime_text.last}' }}" class="template-field">
                             <div class="inline-preview">
@@ -725,7 +725,7 @@
                                 <span id="preview-postgame-description">Pistons defeated Heat 125-124</span>
                             </div>
                         </div>
-                        <div class="form-group" style="margin-top: 1rem; padding: 1rem; background: var(--bg-tertiary); border-radius: 6px;">
+                        <div class="form-group" style="margin-top: 1rem; padding: 1rem; background: var(--bg-tertiary); border-radius: 6px; border: 1px solid var(--border);">
                             <label style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem;">
                                 <input type="checkbox" name="postgame_conditional_enabled" id="postgame_conditional_enabled"
                                        {% if template and template.postgame_conditional_enabled %}checked{% endif %}
@@ -733,17 +733,27 @@
                                 <span>Use conditional description based on last game status</span>
                             </label>
                             <div id="postgame-conditional-fields" style="{% if not template or not template.postgame_conditional_enabled %}display: none;{% endif %}">
-                                <div class="form-group" style="margin-bottom: 0.75rem;">
+                                <div class="form-group" style="margin-bottom: 1rem;">
                                     <label for="postgame_description_final" style="font-size: 0.85rem; color: var(--success);">✓ If last game is final:</label>
                                     <input type="text" name="postgame_description_final" id="postgame_description_final"
                                            value="{{ template.postgame_description_final if template else 'The {team_name} {result_text.last} the {opponent.last} {final_score.last} {overtime_text.last}' }}"
-                                           class="template-field" placeholder="The {team_name} {result_text.last} the {opponent.last} {final_score.last}">
+                                           class="template-field" placeholder="The {team_name} {result_text.last} the {opponent.last} {final_score.last}"
+                                           style="border: 1px solid var(--border); background: var(--bg-secondary);">
+                                    <div class="inline-preview">
+                                        <small>Preview:</small>
+                                        <span id="preview-postgame-description-final"></span>
+                                    </div>
                                 </div>
                                 <div class="form-group" style="margin-bottom: 0;">
                                     <label for="postgame_description_not_final" style="font-size: 0.85rem; color: var(--warning);">⏳ If last game is NOT final:</label>
                                     <input type="text" name="postgame_description_not_final" id="postgame_description_not_final"
                                            value="{{ template.postgame_description_not_final if template else 'The game between the {team_name} and {opponent.last} on {game_day.last} {game_date.last} has not yet ended.' }}"
-                                           class="template-field" placeholder="The game between {team_name} and {opponent.last} has not yet ended.">
+                                           class="template-field" placeholder="The game between {team_name} and {opponent.last} has not yet ended."
+                                           style="border: 1px solid var(--border); background: var(--bg-secondary);">
+                                    <div class="inline-preview">
+                                        <small>Preview:</small>
+                                        <span id="preview-postgame-description-not-final"></span>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -778,7 +788,7 @@
                                 <span id="preview-idle-subtitle"></span>
                             </div>
                         </div>
-                        <div class="form-group">
+                        <div class="form-group" id="idle-description-group">
                             <label for="idle_description">Description</label>
                             <input type="text" name="idle_description" id="idle_description" value="{{ template.idle_description if template else 'Next game: {game_date.next} at {game_time.next} vs {opponent.next}' }}" class="template-field">
                             <div class="inline-preview">
@@ -786,7 +796,7 @@
                                 <span id="preview-idle-description">Next game: November 25 at 7:00 PM vs LA Clippers</span>
                             </div>
                         </div>
-                        <div class="form-group" style="margin-top: 1rem; padding: 1rem; background: var(--bg-tertiary); border-radius: 6px;">
+                        <div class="form-group" style="margin-top: 1rem; padding: 1rem; background: var(--bg-tertiary); border-radius: 6px; border: 1px solid var(--border);">
                             <label style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem;">
                                 <input type="checkbox" name="idle_conditional_enabled" id="idle_conditional_enabled"
                                        {% if template and template.idle_conditional_enabled %}checked{% endif %}
@@ -794,17 +804,27 @@
                                 <span>Use conditional description based on last game status</span>
                             </label>
                             <div id="idle-conditional-fields" style="{% if not template or not template.idle_conditional_enabled %}display: none;{% endif %}">
-                                <div class="form-group" style="margin-bottom: 0.75rem;">
+                                <div class="form-group" style="margin-bottom: 1rem;">
                                     <label for="idle_description_final" style="font-size: 0.85rem; color: var(--success);">✓ If last game is final:</label>
                                     <input type="text" name="idle_description_final" id="idle_description_final"
                                            value="{{ template.idle_description_final if template else 'The {team_name} {result_text.last} the {opponent.last} {final_score.last}. Next: {opponent.next} on {game_date.next}' }}"
-                                           class="template-field" placeholder="The {team_name} {result_text.last} {opponent.last}. Next: {opponent.next}">
+                                           class="template-field" placeholder="The {team_name} {result_text.last} {opponent.last}. Next: {opponent.next}"
+                                           style="border: 1px solid var(--border); background: var(--bg-secondary);">
+                                    <div class="inline-preview">
+                                        <small>Preview:</small>
+                                        <span id="preview-idle-description-final"></span>
+                                    </div>
                                 </div>
                                 <div class="form-group" style="margin-bottom: 0;">
                                     <label for="idle_description_not_final" style="font-size: 0.85rem; color: var(--warning);">⏳ If last game is NOT final:</label>
                                     <input type="text" name="idle_description_not_final" id="idle_description_not_final"
                                            value="{{ template.idle_description_not_final if template else 'The {team_name} last played {opponent.last} on {game_date.last}. Next: {opponent.next} on {game_date.next}' }}"
-                                           class="template-field" placeholder="Last played {opponent.last}. Next: {opponent.next}">
+                                           class="template-field" placeholder="Last played {opponent.last}. Next: {opponent.next}"
+                                           style="border: 1px solid var(--border); background: var(--bg-secondary);">
+                                    <div class="inline-preview">
+                                        <small>Preview:</small>
+                                        <span id="preview-idle-description-not-final"></span>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -992,6 +1012,10 @@ document.addEventListener('DOMContentLoaded', async function() {
             lastTemplateField = this;
         });
     });
+
+    // Initialize conditional toggle states on page load
+    togglePostgameConditional();
+    toggleIdleConditional();
 });
 
 // ============================================================================
@@ -1038,13 +1062,45 @@ function updateGameDurationMode() {
 function togglePostgameConditional() {
     const checkbox = document.getElementById('postgame_conditional_enabled');
     const fields = document.getElementById('postgame-conditional-fields');
+    const mainDescGroup = document.getElementById('postgame-description-group');
+    const mainDescInput = document.getElementById('postgame_description');
+
     fields.style.display = checkbox.checked ? 'block' : 'none';
+
+    // Grey out and disable main description when conditional is enabled
+    if (checkbox.checked) {
+        mainDescGroup.style.opacity = '0.5';
+        mainDescInput.disabled = true;
+        mainDescInput.style.backgroundColor = 'var(--bg-tertiary)';
+    } else {
+        mainDescGroup.style.opacity = '1';
+        mainDescInput.disabled = false;
+        mainDescInput.style.backgroundColor = '';
+    }
+
+    updatePreviews();
 }
 
 function toggleIdleConditional() {
     const checkbox = document.getElementById('idle_conditional_enabled');
     const fields = document.getElementById('idle-conditional-fields');
+    const mainDescGroup = document.getElementById('idle-description-group');
+    const mainDescInput = document.getElementById('idle_description');
+
     fields.style.display = checkbox.checked ? 'block' : 'none';
+
+    // Grey out and disable main description when conditional is enabled
+    if (checkbox.checked) {
+        mainDescGroup.style.opacity = '0.5';
+        mainDescInput.disabled = true;
+        mainDescInput.style.backgroundColor = 'var(--bg-tertiary)';
+    } else {
+        mainDescGroup.style.opacity = '1';
+        mainDescInput.disabled = false;
+        mainDescInput.style.backgroundColor = '';
+    }
+
+    updatePreviews();
 }
 
 // ============================================================================
@@ -1108,6 +1164,22 @@ function updatePreviews() {
 
     const previewIdleDesc = document.getElementById('preview-idle-description');
     if (previewIdleDesc) previewIdleDesc.textContent = replaceVariables(idleDesc);
+
+    // Update inline previews for postgame conditional descriptions
+    const postgameDescFinal = document.getElementById('postgame_description_final')?.value || '';
+    const postgameDescNotFinal = document.getElementById('postgame_description_not_final')?.value || '';
+    const previewPostgameDescFinal = document.getElementById('preview-postgame-description-final');
+    if (previewPostgameDescFinal) previewPostgameDescFinal.textContent = replaceVariables(postgameDescFinal);
+    const previewPostgameDescNotFinal = document.getElementById('preview-postgame-description-not-final');
+    if (previewPostgameDescNotFinal) previewPostgameDescNotFinal.textContent = replaceVariables(postgameDescNotFinal);
+
+    // Update inline previews for idle conditional descriptions
+    const idleDescFinal = document.getElementById('idle_description_final')?.value || '';
+    const idleDescNotFinal = document.getElementById('idle_description_not_final')?.value || '';
+    const previewIdleDescFinal = document.getElementById('preview-idle-description-final');
+    if (previewIdleDescFinal) previewIdleDescFinal.textContent = replaceVariables(idleDescFinal);
+    const previewIdleDescNotFinal = document.getElementById('preview-idle-description-not-final');
+    if (previewIdleDescNotFinal) previewIdleDescNotFinal.textContent = replaceVariables(idleDescNotFinal);
 
     // Update inline previews for fallback descriptions
     fallbacks.forEach((fallback, index) => {

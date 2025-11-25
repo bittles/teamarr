@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_macros.html" import channel_id_vars_help %}
 
 {% block title %}Teams - Teamarr{% endblock %}
 
@@ -995,7 +996,7 @@ code {
                 <div class="form-group">
                     <label for="modal-custom-format">Custom Channel ID Format</label>
                     <input type="text" id="modal-custom-format" class="form-control" placeholder="{team_name_pascal}.{league_id}">
-                    <small class="form-help">Available variables: {team_name_pascal}, {team_abbrev}, {team_name}, {team_slug}, {espn_team_id}, {league_id}, {league}, {sport}</small>
+                    {{ channel_id_vars_help() }}
                 </div>
             </div>
         </div>

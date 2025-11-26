@@ -766,6 +766,11 @@ def epg_management():
 
             # Analyze EPG content
             epg_analysis = _analyze_epg_content(epg_content)
+
+            # Override total_events with authoritative count from epg_history
+            # (the analysis function guesses using keywords, but we know the real count from generation)
+            if latest_epg and latest_epg.get('num_events') is not None:
+                epg_analysis['total_events'] = latest_epg['num_events']
         except Exception as e:
             app.logger.error(f"Error reading EPG file: {e}")
             epg_content = None
@@ -1732,13 +1737,13 @@ def _analyze_epg_content(xml_content):
             is_filler = False
             if title:
                 title_lower = title.lower()
-                if 'pregame' in title_lower or 'pre-game' in title_lower or 'preview' in title_lower or 'starting soon' in title_lower:
+                if 'pregame' in title_lower or 'pre-game' in title_lower or 'preview' in title_lower or 'starting soon' in title_lower or 'coming up' in title_lower:
                     analysis['filler_programs']['pregame'] += 1
                     is_filler = True
                 elif 'postgame' in title_lower or 'post-game' in title_lower or 'recap' in title_lower or 'highlights' in title_lower or 'replay' in title_lower:
                     analysis['filler_programs']['postgame'] += 1
                     is_filler = True
-                elif 'programming' in title_lower or 'next game' in title_lower or 'no game' in title_lower:
+                elif 'programming' in title_lower or 'next game' in title_lower or ('no ' in title_lower and 'game today' in title_lower):
                     analysis['filler_programs']['idle'] += 1
                     is_filler = True
 

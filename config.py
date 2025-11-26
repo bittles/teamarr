@@ -67,12 +67,14 @@ def get_version():
 
     # Build version string
     if branch and branch != 'unknown':
-        if branch == 'dev':
-            if sha and sha != 'unknown':
-                version = f"{BASE_VERSION}-dev+{sha}"
-            else:
-                version = f"{BASE_VERSION}-dev"
-        elif branch not in ['main', 'master']:
+        if branch in ['main', 'master']:
+            # Clean version for production
+            pass
+        elif sha and sha != 'unknown':
+            # Dev and feature branches get SHA suffix
+            version = f"{BASE_VERSION}-{branch}+{sha}"
+        else:
+            # Fallback without SHA
             version = f"{BASE_VERSION}-{branch}"
 
     return version

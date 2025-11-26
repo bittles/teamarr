@@ -6,7 +6,7 @@
   "suffix_system": {
     "enabled": true,
     "description": "Optimized suffix system after comprehensive audit - only necessary suffixes are generated",
-    "total_with_suffixes": 282,
+    "total_with_suffixes": 290,
     "audit_summary": {
       "last_only": {
         "count": 11,
@@ -33,9 +33,9 @@
         ]
       },
       "base_only": {
-        "count": 36,
+        "count": 32,
         "description": "Team identity and season stats that don't vary by game context",
-        "total_instances": 36,
+        "total_instances": 32,
         "examples": [
           "team_name",
           "team_record",
@@ -45,9 +45,9 @@
         ]
       },
       "all_three": {
-        "count": 69,
+        "count": 73,
         "description": "Game-specific variables that vary across contexts",
-        "total_instances": 207,
+        "total_instances": 219,
         "examples": [
           "opponent",
           "game_date",
@@ -3119,7 +3119,7 @@
     },
     {
       "name": "home_team_record",
-      "description": "If home today",
+      "description": "Home team's record for this game",
       "source": "Calculated",
       "category": "\ud83d\udcca Records & Streaks",
       "icon": "\ud83d\udcca",
@@ -3132,7 +3132,9 @@
         "baseball"
       ],
       "available_suffixes": [
-        "base"
+        "base",
+        "next",
+        "last"
       ],
       "examples_by_sport": {
         "NBA": "14-2",
@@ -3146,7 +3148,7 @@
     },
     {
       "name": "away_team_record",
-      "description": "If away today",
+      "description": "Away team's record for this game",
       "source": "Calculated",
       "category": "\ud83d\udcca Records & Streaks",
       "icon": "\ud83d\udcca",
@@ -3159,7 +3161,9 @@
         "baseball"
       ],
       "available_suffixes": [
-        "base"
+        "base",
+        "next",
+        "last"
       ],
       "examples_by_sport": {
         "NBA": "8-8",
@@ -3240,7 +3244,9 @@
         "baseball"
       ],
       "available_suffixes": [
-        "base"
+        "base",
+        "next",
+        "last"
       ],
       "examples_by_sport": {
         "NBA": "Detroit Pistons",
@@ -3267,7 +3273,9 @@
         "baseball"
       ],
       "available_suffixes": [
-        "base"
+        "base",
+        "next",
+        "last"
       ],
       "examples_by_sport": {
         "NBA": "Indiana Pacers",
@@ -3957,7 +3965,7 @@
     }
   ],
   "base_variables_count": 113,
-  "total_variables_count": 240,
+  "total_variables_count": 248,
   "examples_by_sport_info": {
     "description": "Each variable has sport-specific example values representing realistic scenarios",
     "sports": [

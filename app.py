@@ -1755,23 +1755,6 @@ def _analyze_epg_content(xml_content):
                         if var not in analysis['unreplaced_variables']:
                             analysis['unreplaced_variables'].append(var)
 
-            # Classify program type
-            is_filler = False
-            if title:
-                title_lower = title.lower()
-                if 'pregame' in title_lower or 'pre-game' in title_lower or 'preview' in title_lower or 'starting soon' in title_lower or 'coming up' in title_lower:
-                    analysis['filler_programs']['pregame'] += 1
-                    is_filler = True
-                elif 'postgame' in title_lower or 'post-game' in title_lower or 'recap' in title_lower or 'highlights' in title_lower or 'replay' in title_lower:
-                    analysis['filler_programs']['postgame'] += 1
-                    is_filler = True
-                elif 'programming' in title_lower or 'next game' in title_lower or ('no ' in title_lower and 'game today' in title_lower):
-                    analysis['filler_programs']['idle'] += 1
-                    is_filler = True
-
-            if not is_filler:
-                analysis['total_events'] += 1
-
             # Track for gap detection
             if channel not in channel_programs:
                 channel_programs[channel] = []

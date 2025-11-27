@@ -675,6 +675,92 @@ class ChannelManager:
     def __init__(self, url: str, username: str, password: str):
         self.auth = DispatcharrAuth(url, username, password)
 
+    # =========================================================================
+    # HELPER METHODS - Consolidated patterns for pagination and error handling
+    # =========================================================================
+
+    def _paginated_get(
+        self,
+        initial_endpoint: str,
+        error_context: str = "items"
+    ) -> List[Dict]:
+        """
+        Fetch all items from a paginated API endpoint.
+
+        Handles both paginated dict responses (with 'results' and 'next')
+        and simple list responses.
+
+        Args:
+            initial_endpoint: Starting endpoint with page_size (e.g., "/api/channels/channels/?page_size=1000")
+            error_context: Context for error logging (e.g., "channels", "EPG data")
+
+        Returns:
+            List of all items from all pages
+        """
+        from urllib.parse import urlparse
+
+        all_items = []
+        next_page = initial_endpoint
+
+        while next_page:
+            response = self.auth.get(next_page)
+            if not response or response.status_code != 200:
+                logger.error(f"Failed to get {error_context}: {response.status_code if response else 'No response'}")
+                break
+
+            data = response.json()
+
+            if isinstance(data, dict) and 'results' in data:
+                all_items.extend(data['results'])
+                next_url = data.get('next')
+                if next_url:
+                    # Handle absolute URLs by extracting path+query
+                    if next_url.startswith('http'):
+                        parsed = urlparse(next_url)
+                        next_page = f"{parsed.path}?{parsed.query}" if parsed.query else parsed.path
+                    else:
+                        next_page = next_url
+                else:
+                    next_page = None
+            elif isinstance(data, list):
+                all_items.extend(data)
+                next_page = None
+            else:
+                next_page = None
+
+        return all_items
+
+    def _parse_api_error(self, response) -> str:
+        """
+        Parse error message from API response.
+
+        Handles various error response formats from Dispatcharr API.
+
+        Args:
+            response: requests.Response object
+
+        Returns:
+            Human-readable error message
+        """
+        if not response:
+            return "Request failed - no response"
+
+        try:
+            error_data = response.json()
+            if isinstance(error_data, dict):
+                # Format field errors (e.g., {"name": ["This field is required"]})
+                errors = []
+                for field, msgs in error_data.items():
+                    if isinstance(msgs, list):
+                        errors.append(f"{field}: {', '.join(str(m) for m in msgs)}")
+                    else:
+                        errors.append(f"{field}: {msgs}")
+                return "; ".join(errors) if errors else str(error_data)
+            else:
+                return str(error_data)
+        except Exception:
+            return f"HTTP {response.status_code}"
+
     def get_channels(self, page_size: int = 1000) -> List[Dict]:
         """
         Get all channels from Dispatcharr.
@@ -684,38 +770,10 @@ class ChannelManager:
         Returns:
             List of channel dicts
         """
-        all_channels = []
-        next_page = f"/api/channels/channels/?page_size={page_size}"
-
-        while next_page:
-            response = self.auth.get(next_page)
-            if not response or response.status_code != 200:
-                logger.error(f"Failed to get channels: {response.status_code if response else 'No response'}")
-                break
-
-            data = response.json()
-
-            if isinstance(data, dict) and 'results' in data:
-                all_channels.extend(data['results'])
-                # Handle relative or absolute next URL
-                next_url = data.get('next')
-                if next_url:
-                    if next_url.startswith('http'):
-                        # Extract just the path
-                        from urllib.parse import urlparse
-                        parsed = urlparse(next_url)
-                        next_page = f"{parsed.path}?{parsed.query}" if parsed.query else parsed.path
-                    else:
-                        next_page = next_url
-                else:
-                    next_page = None
-            elif isinstance(data, list):
-                all_channels.extend(data)
-                next_page = None
-            else:
-                next_page = None
-
-        return all_channels
+        return self._paginated_get(
+            f"/api/channels/channels/?page_size={page_size}",
+            error_context="channels"
+        )
 
     def get_channel(self, channel_id: int) -> Optional[Dict]:
         """
@@ -776,29 +834,12 @@ class ChannelManager:
         response = self.auth.post("/api/channels/channels/", payload)
 
         if not response:
-            return {"success": False, "error": "Request failed - no response"}
+            return {"success": False, "error": self._parse_api_error(response)}
 
         if response.status_code in (200, 201):
             return {"success": True, "channel": response.json()}
 
-        # Parse error
-        try:
-            error_data = response.json()
-            if isinstance(error_data, dict):
-                # Format field errors
-                errors = []
-                for field, msgs in error_data.items():
-                    if isinstance(msgs, list):
-                        errors.append(f"{field}: {', '.join(msgs)}")
-                    else:
-                        errors.append(f"{field}: {msgs}")
-                error_msg = "; ".join(errors) if errors else str(error_data)
-            else:
-                error_msg = str(error_data)
-        except Exception:
-            error_msg = f"HTTP {response.status_code}"
-
-        return {"success": False, "error": error_msg}
+        return {"success": False, "error": self._parse_api_error(response)}
 
     def update_channel(self, channel_id: int, data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -818,17 +859,12 @@ class ChannelManager:
         response = self.auth.request("PATCH", f"/api/channels/channels/{channel_id}/", data)
 
         if not response:
-            return {"success": False, "error": "Request failed - no response"}
+            return {"success": False, "error": self._parse_api_error(response)}
 
         if response.status_code == 200:
             return {"success": True, "channel": response.json()}
 
-        try:
-            error_msg = response.json()
-        except Exception:
-            error_msg = f"HTTP {response.status_code}"
-
-        return {"success": False, "error": str(error_msg)}
+        return {"success": False, "error": self._parse_api_error(response)}
 
     def delete_channel(self, channel_id: int) -> Dict[str, Any]:
         """
@@ -843,7 +879,7 @@ class ChannelManager:
         response = self.auth.request("DELETE", f"/api/channels/channels/{channel_id}/")
 
         if not response:
-            return {"success": False, "error": "Request failed - no response"}
+            return {"success": False, "error": self._parse_api_error(response)}
 
         if response.status_code in (200, 204):
             return {"success": True}
@@ -851,12 +887,7 @@ class ChannelManager:
         if response.status_code == 404:
             return {"success": False, "error": "Channel not found"}
 
-        try:
-            error_msg = response.json()
-        except Exception:
-            error_msg = f"HTTP {response.status_code}"
-
-        return {"success": False, "error": str(error_msg)}
+        return {"success": False, "error": self._parse_api_error(response)}
 
     def assign_streams(self, channel_id: int, stream_ids: List[int]) -> Dict[str, Any]:
         """
@@ -938,17 +969,12 @@ class ChannelManager:
         )
 
         if not response:
-            return {"success": False, "error": "Request failed - no response"}
+            return {"success": False, "error": self._parse_api_error(response)}
 
         if response.status_code == 200:
             return {"success": True}
 
-        try:
-            error_msg = response.json()
-        except Exception:
-            error_msg = f"HTTP {response.status_code}"
-
-        return {"success": False, "error": str(error_msg)}
+        return {"success": False, "error": self._parse_api_error(response)}
 
     def get_epg_data_list(self, epg_source_id: int = None) -> List[Dict]:
         """
@@ -963,31 +989,10 @@ class ChannelManager:
         Returns:
             List of EPGData dicts with id, tvg_id, name, icon_url, epg_source
         """
-        all_epg_data = []
-        next_page = "/api/epg/epgdata/?page_size=500"
-
-        while next_page:
-            response = self.auth.get(next_page)
-            if not response or response.status_code != 200:
-                logger.error(f"Failed to get EPG data: {response.status_code if response else 'No response'}")
-                break
-
-            data = response.json()
-
-            if isinstance(data, dict) and 'results' in data:
-                all_epg_data.extend(data['results'])
-                next_url = data.get('next')
-                if next_url:
-                    from urllib.parse import urlparse
-                    parsed = urlparse(next_url)
-                    next_page = f"{parsed.path}?{parsed.query}" if parsed.query else parsed.path
-                else:
-                    next_page = None
-            elif isinstance(data, list):
-                all_epg_data.extend(data)
-                next_page = None
-            else:
-                next_page = None
+        all_epg_data = self._paginated_get(
+            "/api/epg/epgdata/?page_size=500",
+            error_context="EPG data"
+        )
 
         # Filter by epg_source_id if specified
         if epg_source_id is not None:
@@ -1088,33 +1093,14 @@ class ChannelManager:
         Returns:
             Logo dict or None if not found
         """
-        # Fetch logos (paginated)
-        next_page = "/api/channels/logos/?page_size=100"
+        logos = self._paginated_get(
+            "/api/channels/logos/?page_size=100",
+            error_context="logos"
+        )
 
-        while next_page:
-            response = self.auth.get(next_page)
-            if not response or response.status_code != 200:
-                break
-
-            data = response.json()
-            if isinstance(data, dict) and 'results' in data:
-                logos = data['results']
-                next_url = data.get('next')
-                if next_url:
-                    # Extract just the path and query
-                    from urllib.parse import urlparse
-                    parsed = urlparse(next_url)
-                    next_page = f"{parsed.path}?{parsed.query}" if parsed.query else parsed.path
-                else:
-                    next_page = None
-            else:
-                # Assume it's a list
-                logos = data if isinstance(data, list) else []
-                next_page = None
-
-            for logo in logos:
-                if logo.get('url') == url:
-                    return logo
+        for logo in logos:
+            if logo.get('url') == url:
+                return logo
 
         return None
 
@@ -1258,27 +1244,7 @@ class ChannelManager:
                 "group_id": group_data.get('id')
             }
 
-        # Parse error
-        try:
-            error_data = response.json()
-            if isinstance(error_data, dict):
-                # Check for pattern/validation errors
-                if 'name' in error_data:
-                    error_msg = f"Invalid group name: {error_data['name']}"
-                else:
-                    errors = []
-                    for field, msgs in error_data.items():
-                        if isinstance(msgs, list):
-                            errors.append(f"{field}: {', '.join(str(m) for m in msgs)}")
-                        else:
-                            errors.append(f"{field}: {msgs}")
-                    error_msg = "; ".join(errors) if errors else str(error_data)
-            else:
-                error_msg = str(error_data)
-        except Exception:
-            error_msg = f"HTTP {response.status_code}"
-
-        return {"success": False, "error": error_msg}
+        return {"success": False, "error": self._parse_api_error(response)}
 
     def get_channel_group(self, group_id: int) -> Optional[Dict]:
         """
@@ -1310,17 +1276,12 @@ class ChannelManager:
         response = self.auth.request("PATCH", f"/api/channels/groups/{group_id}/", payload)
 
         if not response:
-            return {"success": False, "error": "Request failed - no response"}
+            return {"success": False, "error": self._parse_api_error(response)}
 
         if response.status_code == 200:
             return {"success": True, "group": response.json()}
 
-        try:
-            error_msg = response.json()
-        except Exception:
-            error_msg = f"HTTP {response.status_code}"
-
-        return {"success": False, "error": str(error_msg)}
+        return {"success": False, "error": self._parse_api_error(response)}
 
     def delete_channel_group(self, group_id: int) -> Dict[str, Any]:
         """
@@ -1345,14 +1306,13 @@ class ChannelManager:
         if response.status_code == 404:
             return {"success": False, "error": "Group not found"}
 
-        # Check for "cannot delete" errors
+        # Check for "cannot delete" errors (special case for groups with channels)
         try:
             error_data = response.json()
             error_str = str(error_data).lower()
             if 'cannot delete' in error_str or 'has channels' in error_str:
                 return {"success": False, "error": "Cannot delete group with existing channels"}
-            error_msg = str(error_data)
         except Exception:
-            error_msg = f"HTTP {response.status_code}"
+            pass
 
-        return {"success": False, "error": error_msg}
+        return {"success": False, "error": self._parse_api_error(response)}

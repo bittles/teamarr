@@ -48,6 +48,95 @@ def get_connection():
     conn.row_factory = sqlite3.Row
     return conn
 
+
+# =============================================================================
+# DATABASE HELPER UTILITIES - Consolidated patterns for connection handling
+# =============================================================================
+
+from contextlib import contextmanager
+
+@contextmanager
+def db_connection():
+    """
+    Context manager for database connections.
+
+    Usage:
+        with db_connection() as conn:
+            result = conn.execute("SELECT * FROM teams").fetchall()
+    """
+    conn = get_connection()
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+def db_fetch_one(query: str, params: tuple = ()) -> Optional[Dict[str, Any]]:
+    """
+    Execute a query and return a single row as a dict.
+
+    Args:
+        query: SQL query string
+        params: Query parameters
+
+    Returns:
+        Dict of the row, or None if not found
+    """
+    with db_connection() as conn:
+        result = conn.execute(query, params).fetchone()
+        return dict(result) if result else None
+
+
+def db_fetch_all(query: str, params: tuple = ()) -> List[Dict[str, Any]]:
+    """
+    Execute a query and return all rows as a list of dicts.
+
+    Args:
+        query: SQL query string
+        params: Query parameters
+
+    Returns:
+        List of dicts
+    """
+    with db_connection() as conn:
+        results = conn.execute(query, params).fetchall()
+        return [dict(row) for row in results]
+
+
+def db_execute(query: str, params: tuple = ()) -> int:
+    """
+    Execute a mutation query (INSERT/UPDATE/DELETE) and return affected rows.
+
+    Args:
+        query: SQL query string
+        params: Query parameters
+
+    Returns:
+        Number of rows affected
+    """
+    with db_connection() as conn:
+        conn.execute(query, params)
+        conn.commit()
+        return conn.total_changes
+
+
+def db_insert(query: str, params: tuple = ()) -> int:
+    """
+    Execute an INSERT query and return the last inserted row ID.
+
+    Args:
+        query: SQL INSERT query string
+        params: Query parameters
+
+    Returns:
+        ID of the inserted row
+    """
+    with db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(query, params)
+        conn.commit()
+        return cursor.lastrowid
+
 def run_migrations(conn):
     """Run database migrations for schema updates"""
     cursor = conn.cursor()
@@ -482,45 +571,80 @@ def reset_database():
         print(f"🗑️  Removed existing database at {DB_PATH}")
     init_database()
 
-# Helper functions for template operations
+# =============================================================================
+# JSON FIELD HANDLER - Centralized JSON serialization/deserialization
+# =============================================================================
 
-def _parse_template_json_fields(template: Dict[str, Any]) -> Dict[str, Any]:
-    """Parse JSON fields in a template dict"""
-    import json
+# Configuration for JSON fields with their default values
+JSON_FIELD_DEFAULTS = {
+    'categories': [],
+    'flags': {},
+    'description_options': [],
+    'warnings_json': [],  # Used in epg_history
+}
 
-    # Fields that should be parsed from JSON
-    json_fields = ['categories', 'flags', 'description_options']
 
-    for field in json_fields:
-        if field in template and template[field]:
+def parse_json_fields(record: Dict[str, Any], fields: List[str] = None) -> Dict[str, Any]:
+    """
+    Parse JSON string fields in a database record.
+
+    Args:
+        record: Dictionary from database row
+        fields: List of field names to parse (defaults to JSON_FIELD_DEFAULTS keys)
+
+    Returns:
+        Record with JSON fields parsed to Python objects
+    """
+    if not record:
+        return record
+
+    fields_to_parse = fields or list(JSON_FIELD_DEFAULTS.keys())
+
+    for field in fields_to_parse:
+        if field in record and record[field]:
             try:
-                # Parse JSON string to Python object
-                template[field] = json.loads(template[field])
+                if isinstance(record[field], str):
+                    record[field] = json.loads(record[field])
             except (json.JSONDecodeError, TypeError):
-                # If parsing fails, leave as-is or set to default
-                if field == 'categories':
-                    template[field] = []
-                elif field == 'flags':
-                    template[field] = {}
-                elif field == 'description_options':
-                    template[field] = []
+                # Use default if parsing fails
+                record[field] = JSON_FIELD_DEFAULTS.get(field, None)
 
-    return template
+    return record
+
+
+def serialize_json_fields(record: Dict[str, Any], fields: List[str] = None) -> Dict[str, Any]:
+    """
+    Serialize Python objects to JSON strings for database storage.
+
+    Args:
+        record: Dictionary to be stored in database
+        fields: List of field names to serialize (defaults to JSON_FIELD_DEFAULTS keys)
+
+    Returns:
+        Record with JSON fields serialized to strings
+    """
+    if not record:
+        return record
+
+    fields_to_serialize = fields or list(JSON_FIELD_DEFAULTS.keys())
+
+    for field in fields_to_serialize:
+        if field in record and record[field] is not None:
+            if not isinstance(record[field], str):
+                record[field] = json.dumps(record[field])
+
+    return record
+
+
+# Backwards compatibility aliases
+def _parse_template_json_fields(template: Dict[str, Any]) -> Dict[str, Any]:
+    """Parse JSON fields in a template dict (backwards compatible wrapper)"""
+    return parse_json_fields(template, ['categories', 'flags', 'description_options'])
+
 
 def _serialize_template_json_fields(template: Dict[str, Any]) -> Dict[str, Any]:
-    """Serialize JSON fields in a template dict to strings for database storage"""
-    import json
-
-    # Fields that should be serialized to JSON
-    json_fields = ['categories', 'flags', 'description_options']
-
-    for field in json_fields:
-        if field in template and template[field] is not None:
-            if not isinstance(template[field], str):
-                # Serialize Python object to JSON string
-                template[field] = json.dumps(template[field])
-
-    return template
+    """Serialize JSON fields in a template dict (backwards compatible wrapper)"""
+    return serialize_json_fields(template, ['categories', 'flags', 'description_options'])
 
 def get_template(template_id: int) -> Optional[Dict[str, Any]]:
     """Get template by ID"""
@@ -831,50 +955,20 @@ def bulk_set_active(team_ids: List[int], active: bool) -> int:
 
 def get_alias(alias_id: int) -> Optional[Dict[str, Any]]:
     """Get a team alias by ID."""
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        result = cursor.execute(
-            "SELECT * FROM team_aliases WHERE id = ?",
-            (alias_id,)
-        ).fetchone()
-        return dict(result) if result else None
-    finally:
-        conn.close()
+    return db_fetch_one("SELECT * FROM team_aliases WHERE id = ?", (alias_id,))
 
 
 def get_aliases_for_league(league: str) -> List[Dict[str, Any]]:
     """Get all team aliases for a specific league."""
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        results = cursor.execute(
-            """
-            SELECT * FROM team_aliases
-            WHERE league = ?
-            ORDER BY alias
-            """,
-            (league.lower(),)
-        ).fetchall()
-        return [dict(row) for row in results]
-    finally:
-        conn.close()
+    return db_fetch_all(
+        "SELECT * FROM team_aliases WHERE league = ? ORDER BY alias",
+        (league.lower(),)
+    )
 
 
 def get_all_aliases() -> List[Dict[str, Any]]:
     """Get all team aliases."""
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        results = cursor.execute(
-            """
-            SELECT * FROM team_aliases
-            ORDER BY league, alias
-            """
-        ).fetchall()
-        return [dict(row) for row in results]
-    finally:
-        conn.close()
+    return db_fetch_all("SELECT * FROM team_aliases ORDER BY league, alias")
 
 
 def create_alias(alias: str, league: str, espn_team_id: str, espn_team_name: str) -> int:
@@ -951,14 +1045,7 @@ def update_alias(alias_id: int, data: Dict[str, Any]) -> bool:
 
 def delete_alias(alias_id: int) -> bool:
     """Delete a team alias."""
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM team_aliases WHERE id = ?", (alias_id,))
-        conn.commit()
-        return cursor.rowcount > 0
-    finally:
-        conn.close()
+    return db_execute("DELETE FROM team_aliases WHERE id = ?", (alias_id,)) > 0
 
 
 def find_alias(alias: str, league: str) -> Optional[Dict[str, Any]]:
@@ -972,19 +1059,10 @@ def find_alias(alias: str, league: str) -> Optional[Dict[str, Any]]:
     Returns:
         Alias dict or None if not found
     """
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        result = cursor.execute(
-            """
-            SELECT * FROM team_aliases
-            WHERE alias = ? AND league = ?
-            """,
-            (alias.lower().strip(), league.lower())
-        ).fetchone()
-        return dict(result) if result else None
-    finally:
-        conn.close()
+    return db_fetch_one(
+        "SELECT * FROM team_aliases WHERE alias = ? AND league = ?",
+        (alias.lower().strip(), league.lower())
+    )
 
 
 def bulk_create_aliases(aliases: List[Dict[str, str]]) -> int:
@@ -1049,36 +1127,23 @@ def get_event_epg_group(group_id: int) -> Optional[Dict[str, Any]]:
 
 def get_event_epg_group_by_dispatcharr_id(dispatcharr_group_id: int) -> Optional[Dict[str, Any]]:
     """Get an event EPG group by Dispatcharr group ID."""
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        result = cursor.execute(
-            "SELECT * FROM event_epg_groups WHERE dispatcharr_group_id = ?",
-            (dispatcharr_group_id,)
-        ).fetchone()
-        return dict(result) if result else None
-    finally:
-        conn.close()
+    return db_fetch_one(
+        "SELECT * FROM event_epg_groups WHERE dispatcharr_group_id = ?",
+        (dispatcharr_group_id,)
+    )
 
 
 def get_all_event_epg_groups(enabled_only: bool = False) -> List[Dict[str, Any]]:
     """Get all event EPG groups with template names."""
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        query = """
-            SELECT g.*, t.name as event_template_name
-            FROM event_epg_groups g
-            LEFT JOIN templates t ON g.event_template_id = t.id
-        """
-        if enabled_only:
-            query += " WHERE g.enabled = 1"
-        query += " ORDER BY g.group_name"
-
-        results = cursor.execute(query).fetchall()
-        return [dict(row) for row in results]
-    finally:
-        conn.close()
+    query = """
+        SELECT g.*, t.name as event_template_name
+        FROM event_epg_groups g
+        LEFT JOIN templates t ON g.event_template_id = t.id
+    """
+    if enabled_only:
+        query += " WHERE g.enabled = 1"
+    query += " ORDER BY g.group_name"
+    return db_fetch_all(query)
 
 
 def create_event_epg_group(
@@ -1167,14 +1232,7 @@ def update_event_epg_group(group_id: int, data: Dict[str, Any]) -> bool:
 
 def delete_event_epg_group(group_id: int) -> bool:
     """Delete an event EPG group."""
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM event_epg_groups WHERE id = ?", (group_id,))
-        conn.commit()
-        return cursor.rowcount > 0
-    finally:
-        conn.close()
+    return db_execute("DELETE FROM event_epg_groups WHERE id = ?", (group_id,)) > 0
 
 
 def update_event_epg_group_stats(
@@ -1183,40 +1241,22 @@ def update_event_epg_group_stats(
     matched_count: int
 ) -> bool:
     """Update stats after EPG generation."""
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            UPDATE event_epg_groups
-            SET stream_count = ?, matched_count = ?, last_refresh = CURRENT_TIMESTAMP
-            WHERE id = ?
-            """,
-            (stream_count, matched_count, group_id)
-        )
-        conn.commit()
-        return cursor.rowcount > 0
-    finally:
-        conn.close()
+    return db_execute(
+        """
+        UPDATE event_epg_groups
+        SET stream_count = ?, matched_count = ?, last_refresh = CURRENT_TIMESTAMP
+        WHERE id = ?
+        """,
+        (stream_count, matched_count, group_id)
+    ) > 0
 
 
 def update_event_epg_group_last_refresh(group_id: int) -> bool:
     """Update only the last_refresh timestamp (without changing stats)."""
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            UPDATE event_epg_groups
-            SET last_refresh = CURRENT_TIMESTAMP
-            WHERE id = ?
-            """,
-            (group_id,)
-        )
-        conn.commit()
-        return cursor.rowcount > 0
-    finally:
-        conn.close()
+    return db_execute(
+        "UPDATE event_epg_groups SET last_refresh = CURRENT_TIMESTAMP WHERE id = ?",
+        (group_id,)
+    ) > 0
 
 
 # =============================================================================
@@ -1225,108 +1265,65 @@ def update_event_epg_group_last_refresh(group_id: int) -> bool:
 
 def get_managed_channel(channel_id: int) -> Optional[Dict[str, Any]]:
     """Get a managed channel by ID."""
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        result = cursor.execute(
-            "SELECT * FROM managed_channels WHERE id = ?",
-            (channel_id,)
-        ).fetchone()
-        return dict(result) if result else None
-    finally:
-        conn.close()
+    return db_fetch_one("SELECT * FROM managed_channels WHERE id = ?", (channel_id,))
 
 
 def get_managed_channel_by_dispatcharr_id(dispatcharr_channel_id: int) -> Optional[Dict[str, Any]]:
     """Get a managed channel by Dispatcharr channel ID."""
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        result = cursor.execute(
-            "SELECT * FROM managed_channels WHERE dispatcharr_channel_id = ?",
-            (dispatcharr_channel_id,)
-        ).fetchone()
-        return dict(result) if result else None
-    finally:
-        conn.close()
+    return db_fetch_one(
+        "SELECT * FROM managed_channels WHERE dispatcharr_channel_id = ?",
+        (dispatcharr_channel_id,)
+    )
 
 
 def get_managed_channel_by_event(espn_event_id: str, group_id: int = None) -> Optional[Dict[str, Any]]:
     """Get a managed channel by ESPN event ID, optionally filtered by group."""
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        if group_id:
-            result = cursor.execute(
-                "SELECT * FROM managed_channels WHERE espn_event_id = ? AND event_epg_group_id = ? AND deleted_at IS NULL",
-                (espn_event_id, group_id)
-            ).fetchone()
-        else:
-            result = cursor.execute(
-                "SELECT * FROM managed_channels WHERE espn_event_id = ? AND deleted_at IS NULL",
-                (espn_event_id,)
-            ).fetchone()
-        return dict(result) if result else None
-    finally:
-        conn.close()
+    if group_id:
+        return db_fetch_one(
+            "SELECT * FROM managed_channels WHERE espn_event_id = ? AND event_epg_group_id = ? AND deleted_at IS NULL",
+            (espn_event_id, group_id)
+        )
+    else:
+        return db_fetch_one(
+            "SELECT * FROM managed_channels WHERE espn_event_id = ? AND deleted_at IS NULL",
+            (espn_event_id,)
+        )
 
 
 def get_managed_channels_for_group(group_id: int, include_deleted: bool = False) -> List[Dict[str, Any]]:
     """Get all managed channels for an event EPG group."""
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        query = "SELECT * FROM managed_channels WHERE event_epg_group_id = ?"
-        if not include_deleted:
-            query += " AND deleted_at IS NULL"
-        query += " ORDER BY channel_number"
-
-        results = cursor.execute(query, (group_id,)).fetchall()
-        return [dict(row) for row in results]
-    finally:
-        conn.close()
+    query = "SELECT * FROM managed_channels WHERE event_epg_group_id = ?"
+    if not include_deleted:
+        query += " AND deleted_at IS NULL"
+    query += " ORDER BY channel_number"
+    return db_fetch_all(query, (group_id,))
 
 
 def get_all_managed_channels(include_deleted: bool = False) -> List[Dict[str, Any]]:
     """Get all managed channels with group info and global timing settings."""
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        query = """
-            SELECT mc.*,
-                   eg.group_name,
-                   s.channel_delete_timing
-            FROM managed_channels mc
-            LEFT JOIN event_epg_groups eg ON mc.event_epg_group_id = eg.id
-            LEFT JOIN settings s ON s.id = 1
-        """
-        if not include_deleted:
-            query += " WHERE mc.deleted_at IS NULL"
-        query += " ORDER BY mc.event_epg_group_id, mc.channel_number"
-
-        results = cursor.execute(query).fetchall()
-        return [dict(row) for row in results]
-    finally:
-        conn.close()
+    query = """
+        SELECT mc.*,
+               eg.group_name,
+               s.channel_delete_timing
+        FROM managed_channels mc
+        LEFT JOIN event_epg_groups eg ON mc.event_epg_group_id = eg.id
+        LEFT JOIN settings s ON s.id = 1
+    """
+    if not include_deleted:
+        query += " WHERE mc.deleted_at IS NULL"
+    query += " ORDER BY mc.event_epg_group_id, mc.channel_number"
+    return db_fetch_all(query)
 
 
 def get_channels_pending_deletion() -> List[Dict[str, Any]]:
     """Get channels that are scheduled for deletion and past their delete time."""
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        results = cursor.execute(
-            """
-            SELECT * FROM managed_channels
-            WHERE scheduled_delete_at IS NOT NULL
-            AND scheduled_delete_at <= CURRENT_TIMESTAMP
-            AND deleted_at IS NULL
-            ORDER BY scheduled_delete_at
-            """
-        ).fetchall()
-        return [dict(row) for row in results]
-    finally:
-        conn.close()
+    return db_fetch_all("""
+        SELECT * FROM managed_channels
+        WHERE scheduled_delete_at IS NOT NULL
+        AND scheduled_delete_at <= CURRENT_TIMESTAMP
+        AND deleted_at IS NULL
+        ORDER BY scheduled_delete_at
+    """)
 
 
 def create_managed_channel(
@@ -1405,29 +1402,15 @@ def update_managed_channel(channel_id: int, data: Dict[str, Any]) -> bool:
 
 def mark_managed_channel_deleted(channel_id: int) -> bool:
     """Mark a managed channel as deleted (soft delete)."""
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute(
-            "UPDATE managed_channels SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?",
-            (channel_id,)
-        )
-        conn.commit()
-        return cursor.rowcount > 0
-    finally:
-        conn.close()
+    return db_execute(
+        "UPDATE managed_channels SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (channel_id,)
+    ) > 0
 
 
 def delete_managed_channel(channel_id: int) -> bool:
     """Hard delete a managed channel record."""
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM managed_channels WHERE id = ?", (channel_id,))
-        conn.commit()
-        return cursor.rowcount > 0
-    finally:
-        conn.close()
+    return db_execute("DELETE FROM managed_channels WHERE id = ?", (channel_id,)) > 0
 
 
 def get_next_available_channel_range(dispatcharr_url: str = None, dispatcharr_username: str = None, dispatcharr_password: str = None) -> int:
@@ -1564,21 +1547,14 @@ def cleanup_old_deleted_channels(days_old: int = 30) -> int:
 
     Returns count of records deleted.
     """
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            DELETE FROM managed_channels
-            WHERE deleted_at IS NOT NULL
-            AND deleted_at < datetime('now', ? || ' days')
-            """,
-            (f"-{days_old}",)
-        )
-        conn.commit()
-        return cursor.rowcount
-    finally:
-        conn.close()
+    return db_execute(
+        """
+        DELETE FROM managed_channels
+        WHERE deleted_at IS NOT NULL
+        AND deleted_at < datetime('now', ? || ' days')
+        """,
+        (f"-{days_old}",)
+    )
 
 
 # =============================================================================
@@ -1687,6 +1663,15 @@ def save_epg_generation_stats(stats: Dict[str, Any]) -> int:
         conn.close()
 
 
+def _parse_epg_history_record(record: Dict[str, Any]) -> Dict[str, Any]:
+    """Parse EPG history record, extracting warnings from warnings_json."""
+    if record:
+        parse_json_fields(record, ['warnings_json'])
+        # Copy to expected 'warnings' key
+        record['warnings'] = record.get('warnings_json', []) or []
+    return record
+
+
 def get_latest_epg_stats() -> Optional[Dict[str, Any]]:
     """
     Get the most recent EPG generation stats.
@@ -1696,30 +1681,13 @@ def get_latest_epg_stats() -> Optional[Dict[str, Any]]:
     Returns:
         Dict with all stats columns, or None if no history exists
     """
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        result = cursor.execute("""
-            SELECT * FROM epg_history
-            WHERE status = 'success'
-            ORDER BY generated_at DESC
-            LIMIT 1
-        """).fetchone()
-
-        if result:
-            stats = dict(result)
-            # Parse warnings_json if present
-            if stats.get('warnings_json'):
-                try:
-                    stats['warnings'] = json.loads(stats['warnings_json'])
-                except:
-                    stats['warnings'] = []
-            else:
-                stats['warnings'] = []
-            return stats
-        return None
-    finally:
-        conn.close()
+    stats = db_fetch_one("""
+        SELECT * FROM epg_history
+        WHERE status = 'success'
+        ORDER BY generated_at DESC
+        LIMIT 1
+    """)
+    return _parse_epg_history_record(stats)
 
 
 def get_epg_history(limit: int = 10) -> List[Dict[str, Any]]:
@@ -1732,31 +1700,12 @@ def get_epg_history(limit: int = 10) -> List[Dict[str, Any]]:
     Returns:
         List of epg_history dicts, newest first
     """
-    conn = get_connection()
-    try:
-        cursor = conn.cursor()
-        results = cursor.execute("""
-            SELECT * FROM epg_history
-            ORDER BY generated_at DESC
-            LIMIT ?
-        """, (limit,)).fetchall()
-
-        history = []
-        for row in results:
-            entry = dict(row)
-            # Parse warnings_json if present
-            if entry.get('warnings_json'):
-                try:
-                    entry['warnings'] = json.loads(entry['warnings_json'])
-                except:
-                    entry['warnings'] = []
-            else:
-                entry['warnings'] = []
-            history.append(entry)
-
-        return history
-    finally:
-        conn.close()
+    results = db_fetch_all("""
+        SELECT * FROM epg_history
+        ORDER BY generated_at DESC
+        LIMIT ?
+    """, (limit,))
+    return [_parse_epg_history_record(r) for r in results]
 
 
 def get_epg_stats_summary() -> Dict[str, Any]:

@@ -81,7 +81,7 @@
                 <a href="{{ url_for('epg_management') }}" class="manage-link">Manage →</a>
             </div>
             <div class="quadrant-tiles">
-                <div class="tile">
+                <div class="tile" title="Team-based: {{ epg_stats.channels.team_based }} | Event-based: {{ epg_stats.channels.event_based }}">
                     <div class="tile-value">{{ epg_stats.total_channels }}</div>
                     <div class="tile-label">Channels</div>
                 </div>
@@ -194,7 +194,7 @@
 
 <style>
 .page-container {
-    max-width: 1200px;
+    max-width: 1400px;
     margin: 0 auto;
     padding: 1.5rem 0;
 }

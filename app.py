@@ -566,6 +566,9 @@ def generate_all_epg(progress_callback=None, settings=None, save_history=True, t
                 'num_channels': total_channels,
                 'num_events': total_events,
                 'num_programmes': total_programmes,
+                'num_pregame': team_stats['pregame'] + event_stats['pregame'],
+                'num_postgame': team_stats['postgame'] + event_stats['postgame'],
+                'num_idle': team_stats['idle'],  # Only team-based has idle
                 # Team-based breakdown
                 'team_based_channels': team_stats['count'],
                 'team_based_events': team_stats['events'],
@@ -1463,6 +1466,7 @@ def teams_toggle_status(team_id):
 def epg_management():
     """EPG management page"""
     import os
+    from database import get_epg_stats_summary
 
     # Get latest EPG generation info
     conn = get_connection()
@@ -1475,6 +1479,9 @@ def epg_management():
 
     settings = dict(conn.execute("SELECT * FROM settings WHERE id = 1").fetchone())
     conn.close()
+
+    # Get EPG stats from single source of truth
+    epg_stats = get_epg_stats_summary()
 
     # Check if EPG file exists
     epg_path = settings.get('epg_output_path', '/app/data/teamarr.xml')
@@ -1531,6 +1538,7 @@ def epg_management():
                          epg_content=epg_content,
                          epg_total_lines=epg_total_lines,
                          epg_analysis=epg_analysis,
+                         epg_stats=epg_stats,
                          epg_url=epg_url)
 
 # =============================================================================

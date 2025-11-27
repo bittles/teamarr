@@ -202,7 +202,7 @@ async function loadChannels() {
                     <td style="font-size: 0.875rem;">${deleteText}</td>
                     <td>
                         <button onclick="deleteChannel(${channel.id}, '${escapeHtml(channel.channel_name || 'this channel')}')"
-                                class="btn btn-sm btn-danger" title="Delete channel">
+                                class="btn btn-sm btn-danger" title="Delete channel" style="white-space: nowrap;">
                             🗑️ Delete
                         </button>
                     </td>

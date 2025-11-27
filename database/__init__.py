@@ -1752,6 +1752,9 @@ def get_epg_stats_summary() -> Dict[str, Any]:
         }
 
     # Calculate totals from breakdowns (use breakdown values if available, else legacy)
+    team_channels = latest.get('team_based_channels', 0) or 0
+    event_channels = latest.get('event_based_channels', 0) or 0
+
     team_events = latest.get('team_based_events', 0) or 0
     event_events = latest.get('event_based_events', 0) or 0
     total_events = team_events + event_events if (team_events or event_events) else (latest.get('num_events', 0) or 0)
@@ -1772,6 +1775,11 @@ def get_epg_stats_summary() -> Dict[str, Any]:
         'last_generated': latest.get('generated_at'),
         'total_channels': latest.get('num_channels', 0) or 0,
         'total_programmes': latest.get('num_programmes', 0) or 0,
+        'channels': {
+            'total': latest.get('num_channels', 0) or 0,
+            'team_based': team_channels,
+            'event_based': event_channels,
+        },
         'events': {
             'total': total_events,
             'team_based': team_events,

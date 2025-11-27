@@ -794,7 +794,7 @@
                         <div class="form-group">
                             <label for="channel_logo_url">Channel Logo URL Template</label>
                             <input type="text" name="channel_logo_url" id="channel_logo_url"
-                                   value="{{ template.channel_logo_url if template else '{home_team_logo}' }}"
+                                   value="{{ template.channel_logo_url if template else '' }}"
                                    placeholder="e.g., {home_team_logo} or static URL"
                                    class="template-field"
                                    style="font-family: monospace; font-size: 0.9rem;">
@@ -808,7 +808,7 @@
 
                         <div class="form-group">
                             <label for="title_format">Program Title Template *</label>
-                            <input type="text" name="title_format" id="title_format" value="{{ template.title_format if template else '{team_name} {sport}' }}" required class="template-field">
+                            <input type="text" name="title_format" id="title_format" value="{{ template.title_format if template else '{league} {sport}' }}" required class="template-field">
                             <div class="inline-preview">
                                 <small>Preview:</small>
                                 <span id="preview-title">Detroit Pistons Basketball</span>
@@ -817,7 +817,7 @@
 
                         <div class="form-group">
                             <label for="subtitle_template">Program Subtitle Template</label>
-                            <input type="text" name="subtitle_template" id="subtitle_template" value="{{ template.subtitle_template if template else '{venue_full}' }}" class="template-field">
+                            <input type="text" name="subtitle_template" id="subtitle_template" value="{{ template.subtitle_template if template else '{away_team} at {home_team}' }}" class="template-field">
                             <div class="inline-preview">
                                 <small>Preview:</small>
                                 <span id="preview-subtitle">Kia Center, Orlando</span>
@@ -930,7 +930,7 @@
                         </div>
                         <div class="form-group">
                             <label for="pregame_title">Title</label>
-                            <input type="text" name="pregame_title" id="pregame_title" value="{{ template.pregame_title if template else 'Pregame Coverage' }}" class="template-field">
+                            <input type="text" name="pregame_title" id="pregame_title" value="{{ template.pregame_title if template else 'Coming up: {league} {sport} starting at {game_time.next}' }}" class="template-field">
                             <div class="inline-preview">
                                 <small>Preview:</small>
                                 <span id="preview-pregame-title">Pregame Coverage</span>
@@ -938,7 +938,7 @@
                         </div>
                         <div class="form-group">
                             <label for="pregame_subtitle">Subtitle</label>
-                            <input type="text" name="pregame_subtitle" id="pregame_subtitle" value="{{ template.pregame_subtitle if template else '' }}" placeholder="Optional" class="template-field">
+                            <input type="text" name="pregame_subtitle" id="pregame_subtitle" value="{{ template.pregame_subtitle if template else '{away_team} at {home_team}' }}" placeholder="Optional" class="template-field">
                             <div class="inline-preview">
                                 <small>Preview:</small>
                                 <span id="preview-pregame-subtitle"></span>
@@ -946,7 +946,7 @@
                         </div>
                         <div class="form-group">
                             <label for="pregame_description">Description</label>
-                            <input type="text" name="pregame_description" id="pregame_description" value="{{ template.pregame_description if template else '{team_name} plays {opponent} today at {game_time}' }}" class="template-field">
+                            <input type="text" name="pregame_description" id="pregame_description" value="{{ template.pregame_description if template else 'The {away_team_record.next} {away_team.next} travel to {venue_city}, {venue_state} to play the {home_team_record.next} {home_team.next} today at {game_time.next}.' }}" class="template-field">
                             <div class="inline-preview">
                                 <small>Preview:</small>
                                 <span id="preview-pregame-description">Pistons play Magic today at 7:00 PM EST</span>
@@ -969,7 +969,7 @@
                         </div>
                         <div class="form-group">
                             <label for="postgame_title">Title</label>
-                            <input type="text" name="postgame_title" id="postgame_title" value="{{ template.postgame_title if template else 'Postgame Recap' }}" class="template-field">
+                            <input type="text" name="postgame_title" id="postgame_title" value="{{ template.postgame_title if template else '{league} {sport}: {team_name} Postgame Recap' }}" class="template-field">
                             <div class="inline-preview">
                                 <small>Preview:</small>
                                 <span id="preview-postgame-title">Postgame Recap</span>
@@ -977,7 +977,7 @@
                         </div>
                         <div class="form-group">
                             <label for="postgame_subtitle">Subtitle</label>
-                            <input type="text" name="postgame_subtitle" id="postgame_subtitle" value="{{ template.postgame_subtitle if template else '' }}" placeholder="Optional" class="template-field">
+                            <input type="text" name="postgame_subtitle" id="postgame_subtitle" value="{{ template.postgame_subtitle if template else '{away_team.last} at {home_team.last}' }}" placeholder="Optional" class="template-field">
                             <div class="inline-preview">
                                 <small>Preview:</small>
                                 <span id="preview-postgame-subtitle"></span>
@@ -994,11 +994,11 @@
                         <div class="form-group" style="margin-top: 1rem; padding: 1rem; background: var(--bg-tertiary); border-radius: 6px; border: 1px solid var(--border);">
                             <label style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem;">
                                 <input type="checkbox" name="postgame_conditional_enabled" id="postgame_conditional_enabled"
-                                       {% if template and template.postgame_conditional_enabled %}checked{% endif %}
+                                       {% if not template or template.postgame_conditional_enabled %}checked{% endif %}
                                        onchange="togglePostgameConditional()">
                                 <span>Use conditional description based on last game status</span>
                             </label>
-                            <div id="postgame-conditional-fields" style="{% if not template or not template.postgame_conditional_enabled %}display: none;{% endif %}">
+                            <div id="postgame-conditional-fields" style="{% if template and not template.postgame_conditional_enabled %}display: none;{% endif %}">
                                 <div class="form-group" style="margin-bottom: 1rem;">
                                     <label for="postgame_description_final" style="font-size: 0.85rem; color: var(--success);">✓ If last game is final:</label>
                                     <input type="text" name="postgame_description_final" id="postgame_description_final"
@@ -1013,7 +1013,7 @@
                                 <div class="form-group" style="margin-bottom: 0;">
                                     <label for="postgame_description_not_final" style="font-size: 0.85rem; color: var(--warning);">⏳ If last game is NOT final:</label>
                                     <input type="text" name="postgame_description_not_final" id="postgame_description_not_final"
-                                           value="{{ template.postgame_description_not_final if template else 'The game between the {team_name} and {opponent.last} on {game_day.last} {game_date.last} has not yet ended.' }}"
+                                           value="{{ template.postgame_description_not_final if template else 'The game between the {team_name} and the {opponent.last} on {game_date.last} has not yet ended as of the last update.' }}"
                                            class="template-field" placeholder="The game between {team_name} and {opponent.last} has not yet ended."
                                            style="border: 1px solid var(--border); background: var(--bg-secondary);">
                                     <div class="inline-preview">
@@ -1040,7 +1040,7 @@
                         </div>
                         <div class="form-group">
                             <label for="idle_title">Title</label>
-                            <input type="text" name="idle_title" id="idle_title" value="{{ template.idle_title if template else '{team_name} Programming' }}" class="template-field">
+                            <input type="text" name="idle_title" id="idle_title" value="{{ template.idle_title if template else 'No {team_name} Game Today' }}" class="template-field">
                             <div class="inline-preview">
                                 <small>Preview:</small>
                                 <span id="preview-idle-title">Pistons Programming</span>
@@ -1048,7 +1048,7 @@
                         </div>
                         <div class="form-group">
                             <label for="idle_subtitle">Subtitle</label>
-                            <input type="text" name="idle_subtitle" id="idle_subtitle" value="{{ template.idle_subtitle if template else '' }}" placeholder="Optional" class="template-field">
+                            <input type="text" name="idle_subtitle" id="idle_subtitle" value="{{ template.idle_subtitle if template else 'Next game: {game_date.next} at {game_time.next} {vs_at.next} the {opponent.next}' }}" placeholder="Optional" class="template-field">
                             <div class="inline-preview">
                                 <small>Preview:</small>
                                 <span id="preview-idle-subtitle"></span>
@@ -1065,15 +1065,15 @@
                         <div class="form-group" style="margin-top: 1rem; padding: 1rem; background: var(--bg-tertiary); border-radius: 6px; border: 1px solid var(--border);">
                             <label style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem;">
                                 <input type="checkbox" name="idle_conditional_enabled" id="idle_conditional_enabled"
-                                       {% if template and template.idle_conditional_enabled %}checked{% endif %}
+                                       {% if not template or template.idle_conditional_enabled %}checked{% endif %}
                                        onchange="toggleIdleConditional()">
                                 <span>Use conditional description based on last game status</span>
                             </label>
-                            <div id="idle-conditional-fields" style="{% if not template or not template.idle_conditional_enabled %}display: none;{% endif %}">
+                            <div id="idle-conditional-fields" style="{% if template and not template.idle_conditional_enabled %}display: none;{% endif %}">
                                 <div class="form-group" style="margin-bottom: 1rem;">
                                     <label for="idle_description_final" style="font-size: 0.85rem; color: var(--success);">✓ If last game is final:</label>
                                     <input type="text" name="idle_description_final" id="idle_description_final"
-                                           value="{{ template.idle_description_final if template else 'The {team_name} {result_text.last} the {opponent.last} {final_score.last}. Next: {opponent.next} on {game_date.next}' }}"
+                                           value="{{ template.idle_description_final if template else 'The {team_name} {result_text.last} the {opponent.last} on {game_date.last} {final_score.last} {overtime_text.last}' }}"
                                            class="template-field" placeholder="The {team_name} {result_text.last} {opponent.last}. Next: {opponent.next}"
                                            style="border: 1px solid var(--border); background: var(--bg-secondary);">
                                     <div class="inline-preview">
@@ -1084,7 +1084,7 @@
                                 <div class="form-group" style="margin-bottom: 0;">
                                     <label for="idle_description_not_final" style="font-size: 0.85rem; color: var(--warning);">⏳ If last game is NOT final:</label>
                                     <input type="text" name="idle_description_not_final" id="idle_description_not_final"
-                                           value="{{ template.idle_description_not_final if template else 'The {team_name} last played {opponent.last} on {game_date.last}. Next: {opponent.next} on {game_date.next}' }}"
+                                           value="{{ template.idle_description_not_final if template else 'The {team_name} last played against the {opponent.last} on {game_date.last}.' }}"
                                            class="template-field" placeholder="Last played {opponent.last}. Next: {opponent.next}"
                                            style="border: 1px solid var(--border); background: var(--bg-secondary);">
                                     <div class="inline-preview">
@@ -1112,12 +1112,12 @@
                             <div style="display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 0.5rem;">
                                 <label style="display: flex; align-items: center; gap: 0.5rem;">
                                     <input type="checkbox" name="category_sports" id="category_sports"
-                                           {% if template and template.categories and 'Sports' in template.categories %}checked{% endif %}>
+                                           {% if not template or (template and template.categories and 'Sports' in template.categories) %}checked{% endif %}>
                                     <span>Sports</span>
                                 </label>
                                 <label style="display: flex; align-items: center; gap: 0.5rem;">
                                     <input type="checkbox" name="category_sport_variable" id="category_sport_variable"
-                                           {% if template and template.categories and '{sport}' in template.categories %}checked{% endif %}>
+                                           {% if not template or (template and template.categories and '{sport}' in template.categories) %}checked{% endif %}>
                                     <span><code>{sport}</code> - Auto-populates with team's sport (Basketball, Football, etc.)</span>
                                 </label>
                             </div>
@@ -1144,21 +1144,21 @@
 
                         <div class="form-group">
                             <label>
-                                <input type="checkbox" name="include_new_tag" {% if template and template.flags and template.flags.new %}checked{% endif %}>
+                                <input type="checkbox" name="include_new_tag" {% if not template or (template and template.flags and template.flags.new) %}checked{% endif %}>
                                 Include New Tag
                             </label>
                             <small class="help-text">Adds &lt;new/&gt; tag to scheduled game events</small>
                         </div>
                         <div class="form-group">
                             <label>
-                                <input type="checkbox" name="include_live_tag" {% if template and template.flags and template.flags.live %}checked{% endif %}>
+                                <input type="checkbox" name="include_live_tag" {% if not template or (template and template.flags and template.flags.live) %}checked{% endif %}>
                                 Include Live Tag
                             </label>
                             <small class="help-text">Adds &lt;live/&gt; tag to scheduled game events</small>
                         </div>
                         <div class="form-group">
                             <label>
-                                <input type="checkbox" name="include_date_tag" {% if template and template.flags and template.flags.date %}checked{% endif %}>
+                                <input type="checkbox" name="include_date_tag" {% if not template or (template and template.flags and template.flags.date) %}checked{% endif %}>
                                 Include Date Tag
                             </label>
                             <small class="help-text">Adds &lt;date&gt; tag with program air date in YYYYMMDD format</small>
@@ -1613,93 +1613,9 @@ function updateTemplateTypeDefaults() {
         return;
     }
 
-    // Update default values based on template type
-    if (currentTemplateType === 'event') {
-        // Event template defaults
-        const titleField = document.getElementById('title_format');
-        const subtitleField = document.getElementById('subtitle_template');
-
-        if (titleField && titleField.value === '{team_name} {sport}') {
-            titleField.value = '{away_team} @ {home_team}';
-        }
-        if (subtitleField && subtitleField.value === '{venue_full}') {
-            subtitleField.value = '{venue}';
-        }
-
-        // Update first fallback description if it's the default
-        const firstFallbackTextarea = document.querySelector('textarea[name^="fallback_template_"]');
-        if (firstFallbackTextarea && firstFallbackTextarea.value === '{team_name} faces {opponent} at {venue}') {
-            firstFallbackTextarea.value = '{away_team} vs {home_team} - {league} {sport}';
-        }
-
-        // Update pregame defaults
-        const pregameTitle = document.getElementById('pregame_title');
-        const pregameDesc = document.getElementById('pregame_description');
-        if (pregameTitle && pregameTitle.value === 'Pregame Coverage') {
-            pregameTitle.value = '{away_team} @ {home_team} Pregame';
-        }
-        if (pregameDesc && pregameDesc.value === '{team_name} plays {opponent} today at {game_time}') {
-            pregameDesc.value = '{away_team} takes on {home_team} at {game_time}';
-        }
-
-        // Update postgame defaults
-        const postgameTitle = document.getElementById('postgame_title');
-        const postgameDesc = document.getElementById('postgame_description');
-        if (postgameTitle && postgameTitle.value === 'Postgame Recap') {
-            postgameTitle.value = '{away_team} @ {home_team} Postgame';
-        }
-        if (postgameDesc && postgameDesc.value === '{team_name} {result_text.last} the {opponent.last} {final_score.last} {overtime_text.last}') {
-            postgameDesc.value = '{winner} defeated {loser}. Final: {event_result_abbrev}';
-        }
-
-        // Update idle defaults
-        const idleTitle = document.getElementById('idle_title');
-        if (idleTitle && idleTitle.value === '{team_name} Programming') {
-            idleTitle.value = '{league} Programming';
-        }
-    } else {
-        // Team template defaults (restore if changed from event defaults)
-        const titleField = document.getElementById('title_format');
-        const subtitleField = document.getElementById('subtitle_template');
-
-        if (titleField && titleField.value === '{away_team} @ {home_team}') {
-            titleField.value = '{team_name} {sport}';
-        }
-        if (subtitleField && subtitleField.value === '{venue}') {
-            subtitleField.value = '{venue_full}';
-        }
-
-        const firstFallbackTextarea = document.querySelector('textarea[name^="fallback_template_"]');
-        if (firstFallbackTextarea && firstFallbackTextarea.value === '{away_team} vs {home_team} - {league} {sport}') {
-            firstFallbackTextarea.value = '{team_name} faces {opponent} at {venue}';
-        }
-
-        // Restore pregame defaults
-        const pregameTitle = document.getElementById('pregame_title');
-        const pregameDesc = document.getElementById('pregame_description');
-        if (pregameTitle && pregameTitle.value === '{away_team} @ {home_team} Pregame') {
-            pregameTitle.value = 'Pregame Coverage';
-        }
-        if (pregameDesc && pregameDesc.value === '{away_team} takes on {home_team} at {game_time}') {
-            pregameDesc.value = '{team_name} plays {opponent} today at {game_time}';
-        }
-
-        // Restore postgame defaults
-        const postgameTitle = document.getElementById('postgame_title');
-        const postgameDesc = document.getElementById('postgame_description');
-        if (postgameTitle && postgameTitle.value === '{away_team} @ {home_team} Postgame') {
-            postgameTitle.value = 'Postgame Recap';
-        }
-        if (postgameDesc && postgameDesc.value === '{winner} defeated {loser}. Final: {event_result_abbrev}') {
-            postgameDesc.value = '{team_name} {result_text.last} the {opponent.last} {final_score.last} {overtime_text.last}';
-        }
-
-        // Restore idle defaults
-        const idleTitle = document.getElementById('idle_title');
-        if (idleTitle && idleTitle.value === '{league} Programming') {
-            idleTitle.value = '{team_name} Programming';
-        }
-    }
+    // Shared defaults are the same for both team and event templates
+    // Only event-specific fields (like event_description) differ
+    // No need to swap values when switching template types
 
     // Re-render variables sidebar with filtered variables
     initTemplateVariables();

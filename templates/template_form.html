@@ -794,11 +794,11 @@
                         <div class="form-group">
                             <label for="channel_logo_url">Channel Logo URL Template</label>
                             <input type="text" name="channel_logo_url" id="channel_logo_url"
-                                   value="{{ template.channel_logo_url if template else '' }}"
-                                   placeholder="e.g., {home_team_logo} or static URL"
+                                   value="{{ template.channel_logo_url if template and template.channel_logo_url else '' }}"
+                                   placeholder="Optional. Leave blank to use default logo."
                                    class="template-field"
                                    style="font-family: monospace; font-size: 0.9rem;">
-                            <small class="help-text">URL for dynamically generated art (channel logo). Requires a running <a href="https://github.com/sethwv/game-thumbs" target="_blank" style="color: var(--accent);">game-thumbs</a> instance.</small>
+                            <small class="help-text">Optional. Static URL or template with variables. For dynamic art, use <a href="https://github.com/sethwv/game-thumbs" target="_blank" style="color: var(--accent);">game-thumbs</a>.</small>
                         </div>
                     </fieldset>
 
@@ -829,17 +829,14 @@
                     <fieldset id="event-program-art-section" style="display: none; margin-top: 1.5rem;">
                         <legend><h3>Program Art</h3></legend>
 
-                        <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 1rem;">
-                            URL for dynamically generated art (thumbnails in guide). Requires a running <a href="https://github.com/sethwv/game-thumbs" target="_blank" style="color: var(--accent);">game-thumbs</a> instance.
-                        </p>
-
                         <div class="form-group">
                             <label for="program_art_url_event">Program Art URL Template</label>
                             <input type="text" name="program_art_url" id="program_art_url_event"
-                                   value="{{ template.program_art_url if template else '' }}"
-                                   placeholder="Optional. Leave blank to disable program art"
+                                   value="{{ template.program_art_url if template and template.program_art_url else '' }}"
+                                   placeholder="Optional. Leave blank to disable program art."
                                    class="template-field"
                                    style="font-family: monospace; font-size: 0.9rem;">
+                            <small class="help-text">Optional. Static URL or template with variables. For dynamic art, use <a href="https://github.com/sethwv/game-thumbs" target="_blank" style="color: var(--accent);">game-thumbs</a>.</small>
                         </div>
                     </fieldset>
 
@@ -847,17 +844,14 @@
                     <fieldset id="program-art-section" style="margin-top: 1.5rem;">
                         <legend><h3>Program Art</h3></legend>
 
-                        <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 1rem;">
-                            URL for dynamically generated art. Variables must be available in Teamarr. Requires a running <a href="https://github.com/sethwv/game-thumbs" target="_blank" style="color: var(--accent);">game-thumbs</a> instance.
-                        </p>
-
                         <div class="form-group">
                             <label for="program_art_url">Program Art URL Template</label>
                             <input type="text" name="program_art_url" id="program_art_url"
-                                   value="{{ template.program_art_url if template else '' }}"
-                                   placeholder="Optional. Leave blank to disable program level art"
+                                   value="{{ template.program_art_url if template and template.program_art_url else '' }}"
+                                   placeholder="Optional. Leave blank to disable program art."
                                    class="template-field"
                                    style="font-family: monospace; font-size: 0.9rem;">
+                            <small class="help-text">Optional. Static URL or template with variables. For dynamic art, use <a href="https://github.com/sethwv/game-thumbs" target="_blank" style="color: var(--accent);">game-thumbs</a>.</small>
                         </div>
                     </fieldset>
 
@@ -954,7 +948,8 @@
                         </div>
                         <div class="form-group">
                             <label for="pregame_art_url">Program Art URL</label>
-                            <input type="text" name="pregame_art_url" id="pregame_art_url" value="{{ template.pregame_art_url if template else '' }}" placeholder="Optional. Leave blank to disable program level art" class="template-field" style="font-family: monospace; font-size: 0.9rem;">
+                            <input type="text" name="pregame_art_url" id="pregame_art_url" value="{{ template.pregame_art_url if template and template.pregame_art_url else '' }}" placeholder="Optional. Leave blank to disable program art." class="template-field" style="font-family: monospace; font-size: 0.9rem;">
+                            <small class="help-text">Optional. Static URL or template with variables. For dynamic art, use <a href="https://github.com/sethwv/game-thumbs" target="_blank" style="color: var(--accent);">game-thumbs</a>.</small>
                         </div>
                     </fieldset>
 
@@ -1025,7 +1020,8 @@
                         </div>
                         <div class="form-group">
                             <label for="postgame_art_url">Program Art URL</label>
-                            <input type="text" name="postgame_art_url" id="postgame_art_url" value="{{ template.postgame_art_url if template else '' }}" placeholder="Optional. Leave blank to disable program level art" class="template-field" style="font-family: monospace; font-size: 0.9rem;">
+                            <input type="text" name="postgame_art_url" id="postgame_art_url" value="{{ template.postgame_art_url if template and template.postgame_art_url else '' }}" placeholder="Optional. Leave blank to disable program art." class="template-field" style="font-family: monospace; font-size: 0.9rem;">
+                            <small class="help-text">Optional. Static URL or template with variables. For dynamic art, use <a href="https://github.com/sethwv/game-thumbs" target="_blank" style="color: var(--accent);">game-thumbs</a>.</small>
                         </div>
                     </fieldset>
 
@@ -1096,7 +1092,8 @@
                         </div>
                         <div class="form-group">
                             <label for="idle_art_url">Program Art URL</label>
-                            <input type="text" name="idle_art_url" id="idle_art_url" value="{{ template.idle_art_url if template else '' }}" placeholder="Optional. Leave blank to disable program level art" class="template-field" style="font-family: monospace; font-size: 0.9rem;">
+                            <input type="text" name="idle_art_url" id="idle_art_url" value="{{ template.idle_art_url if template and template.idle_art_url else '' }}" placeholder="Optional. Leave blank to disable program art." class="template-field" style="font-family: monospace; font-size: 0.9rem;">
+                            <small class="help-text">Optional. Static URL or template with variables. For dynamic art, use <a href="https://github.com/sethwv/game-thumbs" target="_blank" style="color: var(--accent);">game-thumbs</a>.</small>
                         </div>
                     </fieldset>
                 </div>

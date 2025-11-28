@@ -2569,12 +2569,20 @@ def api_event_epg_dispatcharr_streams(group_id):
         # Refresh M3U accounts associated with this group before fetching streams
         if do_refresh:
             m3u_accounts = group.get('m3u_accounts', [])
-            for account_id in m3u_accounts:
-                app.logger.debug(f"Refreshing M3U account {account_id} before fetching streams")
-                refresh_result = manager.wait_for_refresh(account_id, timeout=120)
-                if not refresh_result.get('success'):
-                    app.logger.warning(f"M3U refresh for account {account_id} failed: {refresh_result.get('message')}")
-                    # Continue anyway - partial data is better than none
+            app.logger.debug(f"Group {group_id} m3u_accounts: {m3u_accounts}")
+            for account in m3u_accounts:
+                # m3u_accounts can be a list of IDs or a list of dicts with account info
+                if isinstance(account, dict):
+                    # Try common field names for account ID
+                    account_id = account.get('id') or account.get('m3u_account') or account.get('account_id')
+                    app.logger.debug(f"Account dict: {account}, extracted id: {account_id}")
+                else:
+                    account_id = account
+                if account_id:
+                    app.logger.debug(f"Refreshing M3U account {account_id} before fetching streams")
+                    refresh_result = manager.wait_for_refresh(account_id, timeout=120)
+                    if not refresh_result.get('success'):
+                        app.logger.warning(f"M3U refresh for account {account_id} failed: {refresh_result.get('message')}")
 
         # Get group info and streams
         result = manager.get_group_with_streams(group_id, stream_limit=limit)

@@ -1168,7 +1168,9 @@ def update_event_epg_group(group_id: int, data: Dict[str, Any]) -> bool:
         if 'assigned_sport' in data:
             data['assigned_sport'] = data['assigned_sport'].lower()
 
-        fields = [k for k in data.keys() if k != 'id']
+        # Exclude fields that aren't actual columns
+        exclude_fields = {'id', 'group_id'}
+        fields = [k for k in data.keys() if k not in exclude_fields]
         if not fields:
             return False
 
@@ -1428,9 +1430,9 @@ def delete_managed_channel(channel_id: int) -> bool:
     return db_execute("DELETE FROM managed_channels WHERE id = ?", (channel_id,)) > 0
 
 
-def get_next_available_channel_range(dispatcharr_url: str = None, dispatcharr_username: str = None, dispatcharr_password: str = None) -> int:
+def get_next_available_channel_range(dispatcharr_url: str = None, dispatcharr_username: str = None, dispatcharr_password: str = None) -> Optional[int]:
     """
-    Calculate the next available channel range start (1001, 2001, 3001, etc.).
+    Calculate the next available channel range start (101, 201, 301, etc.).
 
     This is used as a fallback when a group doesn't have a channel_start set.
     Considers:
@@ -1438,9 +1440,14 @@ def get_next_available_channel_range(dispatcharr_url: str = None, dispatcharr_us
     2. All managed channels' actual channel numbers
     3. All channels in Dispatcharr (if credentials provided)
 
+    Uses 100-channel intervals to maximize available ranges (Dispatcharr max is 9999).
+    E.g., highest is 5135 -> next is 5201, highest is 777 -> next is 801.
+
     Returns:
-        The next available 1001 multiple (e.g., 1001, 2001, 3001, etc.)
+        The next available x01 channel number, or None if no range available (would exceed 9999)
     """
+    MAX_CHANNEL = 9999
+
     conn = get_connection()
     try:
         cursor = conn.cursor()
@@ -1478,12 +1485,18 @@ def get_next_available_channel_range(dispatcharr_url: str = None, dispatcharr_us
             except Exception as e:
                 logger.debug(f"Could not query Dispatcharr channels: {e}")
 
-        # Calculate next 1001 multiple after highest channel
-        # E.g., if highest is 5419, next range is 6001
+        # Calculate next x01 after highest channel (100-channel intervals)
+        # E.g., highest is 5135 -> 5201, highest is 777 -> 801
         if highest_channel == 0:
-            return 1001
+            return 101
 
-        next_range = ((int(highest_channel) // 1000) + 1) * 1000 + 1
+        next_range = ((int(highest_channel) // 100) + 1) * 100 + 1
+
+        # Check we don't exceed Dispatcharr's max channel limit
+        if next_range > MAX_CHANNEL:
+            logger.warning(f"Cannot auto-assign channel range: next would be {next_range}, max is {MAX_CHANNEL}")
+            return None
+
         return int(next_range)
 
     finally:
@@ -1496,7 +1509,7 @@ def get_next_channel_number(group_id: int, auto_assign: bool = True) -> Optional
 
     Uses the group's channel_start and finds the next unused number.
     If the group has no channel_start and auto_assign is True, assigns
-    the next available 1001 range and saves it to the group.
+    the next available 100-channel range (x01) and saves it to the group.
 
     Args:
         group_id: The event group ID

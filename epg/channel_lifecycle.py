@@ -868,14 +868,20 @@ class ChannelLifecycleManager:
         delete_timing = group.get('channel_delete_timing') or global_settings['channel_delete_timing']
         sport = group.get('assigned_sport')
 
-        # Check if group has channel management enabled
+        # Auto-assign channel_start if not set (using get_next_channel_number triggers auto-assign)
         if not channel_start:
-            logger.info(f"Group {group['id']} has no channel_start configured - skipping channel creation")
-            results['skipped'] = [
-                {'stream': m['stream']['name'], 'reason': 'No channel_start configured for group'}
-                for m in matched_streams
-            ]
-            return results
+            # Try to auto-assign a channel range
+            test_channel = get_next_channel_number(group['id'], auto_assign=True)
+            if test_channel:
+                channel_start = ((test_channel - 1) // 100) * 100 + 1  # Get the x01 start
+                logger.info(f"Auto-assigned channel_start {channel_start} to group {group['id']}")
+            else:
+                logger.warning(f"Group {group['id']} could not auto-assign channel range (max 9999 exceeded?)")
+                results['skipped'] = [
+                    {'stream': m['stream']['name'], 'reason': 'Could not auto-assign channel range (max 9999 exceeded)'}
+                    for m in matched_streams
+                ]
+                return results
 
         for matched in matched_streams:
             stream = matched['stream']

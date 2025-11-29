@@ -9,6 +9,9 @@ document.addEventListener('DOMContentLoaded', function() {
     document.body.classList.add(savedTheme + '-theme');
     updateThemeIcon(savedTheme);
 
+    // Show any pending notifications from previous page
+    showPendingNotifications();
+
     // Convert Flask flash messages to notifications
     convertFlashMessages();
 });
@@ -101,6 +104,56 @@ function closeNotification(button) {
     setTimeout(() => {
         notification.remove();
     }, 300); // Match animation duration
+}
+
+// Persistent Notifications - survive page navigation
+const NOTIFICATION_STORAGE_KEY = 'teamarr_pending_notifications';
+
+/**
+ * Store a notification for display on the next page load.
+ * Use this before navigating away from a page after an action.
+ * @param {string} message - Notification message
+ * @param {string} type - 'success', 'error', 'info', or 'warning'
+ * @param {number} duration - Auto-dismiss duration in ms (default: 10000)
+ * @param {string} title - Optional custom title
+ */
+function storeNotification(message, type = 'info', duration = 10000, title = null) {
+    const pending = JSON.parse(sessionStorage.getItem(NOTIFICATION_STORAGE_KEY) || '[]');
+    pending.push({ message, type, duration, title, timestamp: Date.now() });
+    sessionStorage.setItem(NOTIFICATION_STORAGE_KEY, JSON.stringify(pending));
+}
+
+/**
+ * Show all pending notifications from previous page and clear storage.
+ * Called automatically on page load.
+ */
+function showPendingNotifications() {
+    const pending = JSON.parse(sessionStorage.getItem(NOTIFICATION_STORAGE_KEY) || '[]');
+    if (pending.length === 0) return;
+
+    // Clear storage immediately to prevent duplicate shows
+    sessionStorage.removeItem(NOTIFICATION_STORAGE_KEY);
+
+    // Show each pending notification (filter out stale ones older than 30 seconds)
+    const now = Date.now();
+    pending.forEach(n => {
+        if (now - n.timestamp < 30000) {
+            showNotification(n.message, n.type, n.duration, n.title);
+        }
+    });
+}
+
+/**
+ * Show notification immediately AND store it for persistence.
+ * Useful when you're not sure if the page will navigate.
+ * @param {string} message - Notification message
+ * @param {string} type - 'success', 'error', 'info', or 'warning'
+ * @param {number} duration - Auto-dismiss duration in ms (default: 10000)
+ * @param {string} title - Optional custom title
+ */
+function showAndStoreNotification(message, type = 'info', duration = 10000, title = null) {
+    storeNotification(message, type, duration, title);
+    return showNotification(message, type, duration, title);
 }
 
 // Convert Flask flash messages to popup notifications

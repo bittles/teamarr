@@ -661,7 +661,7 @@ async function bulkActivate() {
         }
     }
 
-    showNotification(`Activated ${successCount} of ${groupIds.length} groups`, 'success');
+    storeNotification(`Activated ${successCount} of ${groupIds.length} groups`, 'success');
     location.reload();
 }
 
@@ -685,7 +685,7 @@ async function bulkDeactivate() {
         }
     }
 
-    showNotification(`Deactivated ${successCount} of ${groupIds.length} groups`, 'success');
+    storeNotification(`Deactivated ${successCount} of ${groupIds.length} groups`, 'success');
     location.reload();
 }
 
@@ -705,7 +705,7 @@ async function bulkDelete() {
         }
     }
 
-    showNotification(`Deleted ${successCount} of ${groupIds.length} groups`, 'success');
+    storeNotification(`Deleted ${successCount} of ${groupIds.length} groups`, 'success');
     location.reload();
 }
 
@@ -717,7 +717,7 @@ async function deleteGroup(groupId, groupName) {
         const data = await response.json();
 
         if (response.ok) {
-            showNotification(`Group disabled`, 'success');
+            storeNotification(`Group disabled`, 'success');
             location.reload();
         } else {
             showNotification(`Error: ${data.error}`, 'error');
@@ -956,7 +956,7 @@ async function submitAlias() {
         const data = await response.json();
 
         if (response.ok) {
-            showNotification(`Alias "${aliasText}" created for ${team.name}`, 'success');
+            storeNotification(`Alias "${aliasText}" created for ${team.name}`, 'success');
             closeAliasModal();
             location.reload();
         } else {
@@ -975,7 +975,7 @@ async function deleteAlias(aliasId) {
         const data = await response.json();
 
         if (response.ok) {
-            showNotification('Alias deleted', 'success');
+            storeNotification('Alias deleted', 'success');
             location.reload();
         } else {
             showNotification(`Error: ${data.error}`, 'error');

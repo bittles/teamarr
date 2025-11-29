@@ -1227,24 +1227,27 @@ async function testRegex() {
 
         // Show sample results
         if (data.results && data.results.length > 0) {
-            html += '<div style="font-size: 0.8rem; max-height: 200px; overflow-y: auto; border: 1px solid var(--border); border-radius: 4px; padding: 0.5rem; background: var(--bg-tertiary);">';
+            html += '<div style="font-size: 0.7rem; max-height: 200px; overflow-y: auto; border: 1px solid var(--border); border-radius: 4px; padding: 0.25rem; background: var(--bg-tertiary);">';
             data.results.forEach(result => {
                 const icon = result.matched ? '✓' : '✗';
                 const color = result.matched ? 'var(--success)' : 'var(--danger)';
-                html += `<div style="margin-bottom: 0.5rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--border);">
-                    <div style="color: ${color};">
-                        ${icon} <code style="font-size: 0.75rem;">${escapeHtml(result.stream_name)}</code>
+                html += `<div style="margin-bottom: 0.35rem; padding-bottom: 0.35rem; border-bottom: 1px solid var(--border);">
+                    <div style="color: ${color}; display: flex; align-items: center; gap: 0.25rem;">
+                        <span>${icon}</span>
+                        <div style="overflow-x: auto; white-space: nowrap; flex: 1; padding: 2px 0;">
+                            <code style="font-size: 0.65rem;">${escapeHtml(result.stream_name)}</code>
+                        </div>
                     </div>`;
                 if (result.matched) {
-                    html += `<div style="margin-left: 1rem; color: var(--text-muted); font-size: 0.75rem;">
-                        Raw: "${escapeHtml(result.raw_team1)}" vs "${escapeHtml(result.raw_team2)}"<br>
-                        Resolved: ${escapeHtml(result.resolved_team1)} vs ${escapeHtml(result.resolved_team2)}`;
+                    html += `<div style="margin-left: 1rem; color: var(--text-muted); font-size: 0.65rem;">
+                        ${escapeHtml(result.raw_team1)} → ${escapeHtml(result.resolved_team1)}<br>
+                        ${escapeHtml(result.raw_team2)} → ${escapeHtml(result.resolved_team2)}`;
                     if (result.game_date || result.game_time) {
                         html += `<br>Date/Time: ${result.game_date || '-'} ${result.game_time || '-'}`;
                     }
                     html += '</div>';
                 } else if (result.error) {
-                    html += `<div style="margin-left: 1rem; color: var(--danger); font-size: 0.75rem;">${escapeHtml(result.error)}</div>`;
+                    html += `<div style="margin-left: 1rem; color: var(--danger); font-size: 0.65rem;">${escapeHtml(result.error)}</div>`;
                 }
                 html += '</div>';
             });

@@ -54,7 +54,7 @@ def has_game_indicator(stream_name: str) -> bool:
 def filter_game_streams(
     streams: List[Dict],
     exclude_regex: str = None
-) -> Dict[str, List[Dict]]:
+) -> Dict:
     """
     Filter streams to only those that appear to be game streams.
 
@@ -69,7 +69,9 @@ def filter_game_streams(
     Returns:
         Dict with:
         - 'game_streams': Streams that passed filtering
-        - 'filtered_streams': Streams that were filtered out
+        - 'filtered_streams': All streams that were filtered out
+        - 'filtered_no_indicator': Count of streams without vs/@/at
+        - 'filtered_exclude_regex': Count of streams matching exclusion regex
 
     Example:
         >>> streams = [
@@ -80,11 +82,13 @@ def filter_game_streams(
         >>> result = filter_game_streams(streams)
         >>> len(result['game_streams'])
         1
-        >>> len(result['filtered_streams'])
+        >>> result['filtered_no_indicator']
         2
     """
     game_streams = []
     filtered_streams = []
+    filtered_no_indicator = 0
+    filtered_exclude_regex = 0
 
     # Compile user exclusion pattern if provided
     exclude_pattern = None
@@ -101,11 +105,13 @@ def filter_game_streams(
         # Layer 1: Must have game indicator
         if not has_game_indicator(name):
             filtered_streams.append(stream)
+            filtered_no_indicator += 1
             continue
 
         # Layer 2: Check user exclusion pattern
         if exclude_pattern and exclude_pattern.search(name):
             filtered_streams.append(stream)
+            filtered_exclude_regex += 1
             continue
 
         game_streams.append(stream)
@@ -113,6 +119,8 @@ def filter_game_streams(
     return {
         'game_streams': game_streams,
         'filtered_streams': filtered_streams,
+        'filtered_no_indicator': filtered_no_indicator,
+        'filtered_exclude_regex': filtered_exclude_regex,
     }
 
 

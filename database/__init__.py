@@ -241,6 +241,14 @@ def run_migrations(conn):
         ("unresolved_vars_count", "INTEGER DEFAULT 0"),
         ("coverage_gaps_count", "INTEGER DEFAULT 0"),
         ("warnings_json", "TEXT"),
+        # Event-based filtering stats (aggregated across all groups)
+        ("event_total_streams", "INTEGER DEFAULT 0"),  # Sum of raw provider streams
+        ("event_filtered_no_indicator", "INTEGER DEFAULT 0"),  # Sum filtered by built-in
+        ("event_filtered_exclude_regex", "INTEGER DEFAULT 0"),  # Sum filtered by user regex
+        ("event_filtered_outside_lookahead", "INTEGER DEFAULT 0"),  # Sum outside date range
+        ("event_filtered_final", "INTEGER DEFAULT 0"),  # Sum of final events excluded
+        ("event_eligible_streams", "INTEGER DEFAULT 0"),  # Sum of streams that passed filters
+        ("event_matched_streams", "INTEGER DEFAULT 0"),  # Sum of ESPN matches
     ]
     add_columns_if_missing("epg_history", epg_history_columns)
 
@@ -316,6 +324,13 @@ def run_migrations(conn):
             ("stream_exclude_regex", "TEXT"),  # User regex to exclude streams from matching
             ("stream_exclude_regex_enabled", "INTEGER DEFAULT 0"),  # Enable exclusion regex
             ("skip_builtin_filter", "INTEGER DEFAULT 0"),  # Skip built-in game indicator filter
+            # Filtering stats (per-group breakdown)
+            ("total_stream_count", "INTEGER DEFAULT 0"),  # Raw count from provider
+            ("filtered_no_indicator", "INTEGER DEFAULT 0"),  # No vs/@/at (built-in filter)
+            ("filtered_exclude_regex", "INTEGER DEFAULT 0"),  # Matched user's exclusion regex
+            ("filtered_outside_lookahead", "INTEGER DEFAULT 0"),  # Date outside lookahead window
+            ("filtered_final", "INTEGER DEFAULT 0"),  # Final events (when exclude setting on)
+            # Note: stream_count is now "eligible" streams, matched_count already exists
         ]
         add_columns_if_missing("event_epg_groups", event_group_columns)
 
@@ -1180,16 +1195,54 @@ def delete_event_epg_group(group_id: int) -> bool:
 def update_event_epg_group_stats(
     group_id: int,
     stream_count: int,
-    matched_count: int
+    matched_count: int,
+    total_stream_count: int = None,
+    filtered_no_indicator: int = None,
+    filtered_exclude_regex: int = None,
+    filtered_outside_lookahead: int = None,
+    filtered_final: int = None
 ) -> bool:
-    """Update stats after EPG generation."""
+    """
+    Update stats after EPG generation.
+
+    Args:
+        group_id: Event group ID
+        stream_count: Eligible streams (after all filtering)
+        matched_count: Streams matched to ESPN events
+        total_stream_count: Raw count from provider (optional)
+        filtered_no_indicator: Streams without vs/@/at (optional)
+        filtered_exclude_regex: Streams matching exclusion regex (optional)
+        filtered_outside_lookahead: Streams outside date range (optional)
+        filtered_final: Final events excluded by setting (optional)
+
+    Returns:
+        True if update succeeded
+    """
+    # Build dynamic update based on provided values
+    fields = ["stream_count = ?", "matched_count = ?", "last_refresh = CURRENT_TIMESTAMP"]
+    values = [stream_count, matched_count]
+
+    if total_stream_count is not None:
+        fields.append("total_stream_count = ?")
+        values.append(total_stream_count)
+    if filtered_no_indicator is not None:
+        fields.append("filtered_no_indicator = ?")
+        values.append(filtered_no_indicator)
+    if filtered_exclude_regex is not None:
+        fields.append("filtered_exclude_regex = ?")
+        values.append(filtered_exclude_regex)
+    if filtered_outside_lookahead is not None:
+        fields.append("filtered_outside_lookahead = ?")
+        values.append(filtered_outside_lookahead)
+    if filtered_final is not None:
+        fields.append("filtered_final = ?")
+        values.append(filtered_final)
+
+    values.append(group_id)
+
     return db_execute(
-        """
-        UPDATE event_epg_groups
-        SET stream_count = ?, matched_count = ?, last_refresh = CURRENT_TIMESTAMP
-        WHERE id = ?
-        """,
-        (stream_count, matched_count, group_id)
+        f"UPDATE event_epg_groups SET {', '.join(fields)} WHERE id = ?",
+        tuple(values)
     ) > 0
 
 
@@ -1561,6 +1614,15 @@ def save_epg_generation_stats(stats: Dict[str, Any]) -> int:
             event_based_pregame: int
             event_based_postgame: int
 
+            # Event-based filtering stats (aggregated across all groups)
+            event_total_streams: int - raw streams from provider
+            event_filtered_no_indicator: int - streams without vs/@/at
+            event_filtered_exclude_regex: int - streams matching exclusion regex
+            event_filtered_outside_lookahead: int - past games
+            event_filtered_final: int - final events (when excluded)
+            event_eligible_streams: int - streams that passed all filters
+            event_matched_streams: int - streams matched to ESPN events
+
             # Quality/Error stats
             unresolved_vars_count: int
             coverage_gaps_count: int
@@ -1585,8 +1647,11 @@ def save_epg_generation_stats(stats: Dict[str, Any]) -> int:
                 team_based_pregame, team_based_postgame, team_based_idle,
                 event_based_channels, event_based_events,
                 event_based_pregame, event_based_postgame,
+                event_total_streams, event_filtered_no_indicator,
+                event_filtered_exclude_regex, event_filtered_outside_lookahead,
+                event_filtered_final, event_eligible_streams, event_matched_streams,
                 unresolved_vars_count, coverage_gaps_count, warnings_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             stats.get('file_path', ''),
             stats.get('file_size', 0),
@@ -1613,6 +1678,14 @@ def save_epg_generation_stats(stats: Dict[str, Any]) -> int:
             stats.get('event_based_events', 0),
             stats.get('event_based_pregame', 0),
             stats.get('event_based_postgame', 0),
+            # Event-based filtering stats
+            stats.get('event_total_streams', 0),
+            stats.get('event_filtered_no_indicator', 0),
+            stats.get('event_filtered_exclude_regex', 0),
+            stats.get('event_filtered_outside_lookahead', 0),
+            stats.get('event_filtered_final', 0),
+            stats.get('event_eligible_streams', 0),
+            stats.get('event_matched_streams', 0),
             # Quality stats
             stats.get('unresolved_vars_count', 0),
             stats.get('coverage_gaps_count', 0),

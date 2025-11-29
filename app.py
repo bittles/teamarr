@@ -34,6 +34,7 @@ from epg.xmltv_generator import XMLTVGenerator
 from utils.logger import setup_logging, get_logger
 from utils import to_pascal_case
 from utils.time_format import format_time as fmt_time, get_time_settings
+from utils.filter_reasons import FilterReason, get_display_text, INTERNAL_REASONS
 from config import VERSION
 
 app = Flask(__name__)
@@ -183,10 +184,13 @@ def refresh_event_group_core(group, m3u_manager):
         # Step 2.5: Filter to game streams only (unless skip_builtin_filter is enabled)
         skip_builtin_filter = bool(group.get('skip_builtin_filter', 0))
 
+        # Track granular filtering stats
+        filtered_no_indicator = 0
+        filtered_exclude_regex = 0
+
         if skip_builtin_filter:
             # Skip built-in game indicator filter - user is using custom regex or wants all streams
             streams = all_streams
-            filtered_count = 0
             app.logger.debug(f"Skipping built-in filter (skip_builtin_filter enabled)")
         else:
             # Apply built-in filter (must have vs/@/at indicator)
@@ -200,10 +204,12 @@ def refresh_event_group_core(group, m3u_manager):
                 exclude_regex=exclude_regex
             )
             streams = filter_result['game_streams']
-            filtered_count = len(filter_result['filtered_streams'])
+            filtered_no_indicator = filter_result['filtered_no_indicator']
+            filtered_exclude_regex = filter_result['filtered_exclude_regex']
+            filtered_count = filtered_no_indicator + filtered_exclude_regex
 
             if filtered_count > 0:
-                app.logger.debug(f"Filtered {filtered_count} non-game streams, {len(streams)} game streams remain")
+                app.logger.debug(f"Filtered {filtered_count} non-game streams ({filtered_no_indicator} no indicator, {filtered_exclude_regex} exclude regex), {len(streams)} game streams remain")
 
         # Step 3: Match streams to ESPN events
         team_matcher = create_matcher()
@@ -211,7 +217,8 @@ def refresh_event_group_core(group, m3u_manager):
 
         matched_count = 0
         matched_streams = []
-        final_excluded_count = 0  # Track streams excluded due to final events
+        filtered_outside_lookahead = 0  # Past games (from previous days)
+        filtered_final = 0  # Today's games that are final (when setting excludes)
 
         # Check if any individual custom regex fields are enabled
         teams_enabled = bool(group.get('custom_regex_teams_enabled'))
@@ -262,25 +269,45 @@ def refresh_event_group_core(group, m3u_manager):
                             'teams': team_result,
                             'event': event_result['event']
                         })
-                    elif event_result.get('reason') in ('Game completed (excluded)', 'Game already completed (past)'):
-                        # Don't count streams with final/past events in the denominator
-                        final_excluded_count += 1
+                    else:
+                        # Check if this is an excluded event
+                        reason = event_result.get('reason', '')
+                        normalized = INTERNAL_REASONS.get(reason, reason)
+                        if normalized == FilterReason.GAME_FINAL_EXCLUDED:
+                            # Today's game is final, excluded by setting
+                            filtered_final += 1
+                        elif normalized == FilterReason.GAME_PAST:
+                            # Game from a previous day
+                            filtered_outside_lookahead += 1
 
             except Exception as e:
                 app.logger.warning(f"Error matching stream '{stream['name']}': {e}")
                 continue
 
-        # Update stats (exclude final-excluded streams from denominator when not including finals)
+        # Calculate totals for stats
         game_stream_count = len(streams)
-        effective_stream_count = game_stream_count - final_excluded_count
-        update_event_epg_group_stats(group_id, effective_stream_count, matched_count)
+        total_event_excluded = filtered_outside_lookahead + filtered_final
+        effective_stream_count = game_stream_count - total_event_excluded
+
+        # Update stats with granular filtering breakdown
+        update_event_epg_group_stats(
+            group_id,
+            stream_count=effective_stream_count,
+            matched_count=matched_count,
+            total_stream_count=total_stream_count,
+            filtered_no_indicator=filtered_no_indicator,
+            filtered_exclude_regex=filtered_exclude_regex,
+            filtered_outside_lookahead=filtered_outside_lookahead,
+            filtered_final=filtered_final
+        )
 
         # Log with filtering info
         log_parts = [f"Matched {matched_count}/{effective_stream_count} streams for group '{group['group_name']}'"]
-        if filtered_count > 0:
-            log_parts.append(f"{filtered_count} non-game filtered")
-        if final_excluded_count > 0:
-            log_parts.append(f"{final_excluded_count} final events excluded")
+        total_filtered = filtered_no_indicator + filtered_exclude_regex
+        if total_filtered > 0:
+            log_parts.append(f"{total_filtered} non-game filtered")
+        if total_event_excluded > 0:
+            log_parts.append(f"{total_event_excluded} event excluded ({filtered_outside_lookahead} past, {filtered_final} final)")
         app.logger.debug(" | ".join(log_parts))
 
         # Check if template is assigned
@@ -290,7 +317,10 @@ def refresh_event_group_core(group, m3u_manager):
                 'success': False,
                 'total_stream_count': total_stream_count,
                 'stream_count': game_stream_count,
-                'filtered_count': filtered_count,
+                'filtered_no_indicator': filtered_no_indicator,
+                'filtered_exclude_regex': filtered_exclude_regex,
+                'filtered_outside_lookahead': filtered_outside_lookahead,
+                'filtered_final': filtered_final,
                 'matched_count': matched_count,
                 'matched_streams': [],
                 'error': 'No event template assigned to this group'
@@ -390,7 +420,10 @@ def refresh_event_group_core(group, m3u_manager):
             'success': True,
             'total_stream_count': total_stream_count,
             'stream_count': game_stream_count,
-            'filtered_count': filtered_count,
+            'filtered_no_indicator': filtered_no_indicator,
+            'filtered_exclude_regex': filtered_exclude_regex,
+            'filtered_outside_lookahead': filtered_outside_lookahead,
+            'filtered_final': filtered_final,
             'matched_count': matched_count,
             'matched_streams': matched_streams,
             'epg_result': epg_result,
@@ -462,7 +495,14 @@ def generate_all_epg(progress_callback=None, settings=None, save_history=True, t
         'programmes': 0,
         'events': 0,
         'pregame': 0,
-        'postgame': 0
+        'postgame': 0,
+        # Filtering stats (aggregated across all groups)
+        'total_streams': 0,
+        'filtered_no_indicator': 0,
+        'filtered_exclude_regex': 0,
+        'filtered_outside_lookahead': 0,
+        'filtered_final': 0,
+        'eligible_streams': 0
     }
     lifecycle_stats = {
         'channels_deleted': 0
@@ -559,6 +599,14 @@ def generate_all_epg(progress_callback=None, settings=None, save_history=True, t
                             event_stats['pregame'] += refresh_result.get('pregame_count', 0)
                             event_stats['postgame'] += refresh_result.get('postgame_count', 0)
 
+                            # Aggregate filtering stats
+                            event_stats['total_streams'] += refresh_result.get('total_stream_count', 0)
+                            event_stats['filtered_no_indicator'] += refresh_result.get('filtered_no_indicator', 0)
+                            event_stats['filtered_exclude_regex'] += refresh_result.get('filtered_exclude_regex', 0)
+                            event_stats['filtered_outside_lookahead'] += refresh_result.get('filtered_outside_lookahead', 0)
+                            event_stats['filtered_final'] += refresh_result.get('filtered_final', 0)
+                            event_stats['eligible_streams'] += refresh_result.get('stream_count', 0)
+
                             # Update last refresh timestamp for this group
                             update_event_epg_group_last_refresh(group['id'])
                     except Exception as e:
@@ -650,6 +698,14 @@ def generate_all_epg(progress_callback=None, settings=None, save_history=True, t
                 'event_based_events': event_stats['events'],
                 'event_based_pregame': event_stats['pregame'],
                 'event_based_postgame': event_stats['postgame'],
+                # Event-based filtering stats (aggregated across all groups)
+                'event_total_streams': event_stats['total_streams'],
+                'event_filtered_no_indicator': event_stats['filtered_no_indicator'],
+                'event_filtered_exclude_regex': event_stats['filtered_exclude_regex'],
+                'event_filtered_outside_lookahead': event_stats['filtered_outside_lookahead'],
+                'event_filtered_final': event_stats['filtered_final'],
+                'event_eligible_streams': event_stats['eligible_streams'],
+                'event_matched_streams': event_stats['streams_matched'],
                 # Quality stats (not tracked here, defaults to 0)
                 'unresolved_vars_count': 0,
                 'coverage_gaps_count': 0,
@@ -2755,10 +2811,10 @@ def api_event_epg_dispatcharr_streams(group_id):
 
                         if not skip_builtin_filter and not has_game_indicator(stream_name):
                             is_filtered = True
-                            filter_reason = 'No game indicator (vs, @, at)'
+                            filter_reason = get_display_text(FilterReason.NO_GAME_INDICATOR)
                         elif exclude_regex and exclude_regex.search(stream_name):
                             is_filtered = True
-                            filter_reason = 'Matched exclusion pattern'
+                            filter_reason = get_display_text(FilterReason.EXCLUDE_REGEX_MATCHED)
 
                         if is_filtered:
                             filtered_count += 1
@@ -2796,17 +2852,18 @@ def api_event_epg_dispatcharr_streams(group_id):
                             # Add reason for not found, with better messages
                             if not event_result['found']:
                                 reason = event_result.get('reason', 'No event found')
-                                # Provide clearer messages for common scenarios
-                                if reason == 'Game completed (excluded)':
-                                    # Today's final - excluded by user setting
+                                # Normalize internal reason to constant
+                                normalized = INTERNAL_REASONS.get(reason, reason)
+
+                                # Set flags and display text based on reason
+                                if normalized == FilterReason.GAME_FINAL_EXCLUDED:
                                     event_match_data['is_final'] = True
-                                    event_match_data['reason'] = 'Event is final (excluded by setting)'
-                                elif reason == 'Game already completed (past)':
-                                    # Past game - always excluded regardless of setting
+                                    event_match_data['reason'] = get_display_text(FilterReason.GAME_FINAL_EXCLUDED)
+                                elif normalized == FilterReason.GAME_PAST:
                                     event_match_data['is_past'] = True
-                                    event_match_data['reason'] = 'Event already passed'
-                                elif reason == 'No game found between teams':
-                                    event_match_data['reason'] = f'No event in lookahead range ({lookahead_days} days)'
+                                    event_match_data['reason'] = get_display_text(FilterReason.GAME_PAST)
+                                elif normalized == FilterReason.NO_GAME_FOUND:
+                                    event_match_data['reason'] = get_display_text(FilterReason.NO_GAME_FOUND, lookahead_days)
                                 else:
                                     event_match_data['reason'] = reason
 

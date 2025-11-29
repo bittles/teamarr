@@ -14,6 +14,9 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Convert Flask flash messages to notifications
     convertFlashMessages();
+
+    // Save visible notifications when navigating away
+    window.addEventListener('beforeunload', saveVisibleNotifications);
 });
 
 // Theme toggle functionality
@@ -154,6 +157,33 @@ function showPendingNotifications() {
 function showAndStoreNotification(message, type = 'info', duration = 10000, title = null) {
     storeNotification(message, type, duration, title);
     return showNotification(message, type, duration, title);
+}
+
+/**
+ * Save all currently visible notifications to sessionStorage.
+ * Called automatically on beforeunload so notifications persist across navigation.
+ */
+function saveVisibleNotifications() {
+    const container = document.getElementById('notification-container');
+    if (!container) return;
+
+    const notifications = container.querySelectorAll('.notification:not(.hiding)');
+    if (notifications.length === 0) return;
+
+    notifications.forEach(notification => {
+        const messageEl = notification.querySelector('.notification-message');
+        const titleEl = notification.querySelector('.notification-title');
+        if (!messageEl) return;
+
+        const message = messageEl.textContent;
+        let type = 'info';
+        if (notification.classList.contains('notification-success')) type = 'success';
+        else if (notification.classList.contains('notification-error')) type = 'error';
+        else if (notification.classList.contains('notification-warning')) type = 'warning';
+
+        // Store with shorter duration since some time has passed
+        storeNotification(message, type, 8000, titleEl?.textContent);
+    });
 }
 
 // Convert Flask flash messages to popup notifications

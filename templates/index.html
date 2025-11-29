@@ -81,17 +81,54 @@
                 <a href="{{ url_for('epg_management') }}" class="manage-link">Manage →</a>
             </div>
             <div class="quadrant-tiles">
-                <div class="tile" title="Team-based: {{ epg_stats.channels.team_based }} | Event-based: {{ epg_stats.channels.event_based }}">
+                <div class="tile tile-hoverable">
                     <div class="tile-value">{{ epg_stats.total_channels }}</div>
                     <div class="tile-label">Channels</div>
+                    <div class="tile-tooltip">
+                        <div class="tooltip-title">Breakdown</div>
+                        <div class="tooltip-row">
+                            <span class="tooltip-name">Team-based</span>
+                            <span class="tooltip-value">{{ epg_stats.channels.team_based }}</span>
+                        </div>
+                        <div class="tooltip-row">
+                            <span class="tooltip-name">Event-based</span>
+                            <span class="tooltip-value">{{ epg_stats.channels.event_based }}</span>
+                        </div>
+                    </div>
                 </div>
-                <div class="tile" title="Team-based: {{ epg_stats.events.team_based }} | Event-based: {{ epg_stats.events.event_based }}">
+                <div class="tile tile-hoverable">
                     <div class="tile-value">{{ epg_stats.events.total }}</div>
                     <div class="tile-label">Events</div>
+                    <div class="tile-tooltip">
+                        <div class="tooltip-title">Breakdown</div>
+                        <div class="tooltip-row">
+                            <span class="tooltip-name">Team-based</span>
+                            <span class="tooltip-value">{{ epg_stats.events.team_based }}</span>
+                        </div>
+                        <div class="tooltip-row">
+                            <span class="tooltip-name">Event-based</span>
+                            <span class="tooltip-value">{{ epg_stats.events.event_based }}</span>
+                        </div>
+                    </div>
                 </div>
-                <div class="tile" title="Pregame: {{ epg_stats.filler.pregame.total }} | Postgame: {{ epg_stats.filler.postgame.total }} | Idle: {{ epg_stats.filler.idle.total }}">
+                <div class="tile tile-hoverable">
                     <div class="tile-value">{{ epg_stats.filler.total }}</div>
                     <div class="tile-label">Filler</div>
+                    <div class="tile-tooltip">
+                        <div class="tooltip-title">Breakdown</div>
+                        <div class="tooltip-row">
+                            <span class="tooltip-name">Pregame</span>
+                            <span class="tooltip-value">{{ epg_stats.filler.pregame.total }}</span>
+                        </div>
+                        <div class="tooltip-row">
+                            <span class="tooltip-name">Postgame</span>
+                            <span class="tooltip-value">{{ epg_stats.filler.postgame.total }}</span>
+                        </div>
+                        <div class="tooltip-row">
+                            <span class="tooltip-name">Idle</span>
+                            <span class="tooltip-value">{{ epg_stats.filler.idle.total }}</span>
+                        </div>
+                    </div>
                 </div>
                 <div class="tile">
                     <div class="tile-value">{{ epg_stats.total_programmes }}</div>
@@ -282,6 +319,63 @@
     border-radius: 4px;
     padding: 0.5rem;
     text-align: center;
+    position: relative;
+}
+
+.tile-hoverable {
+    cursor: help;
+}
+
+.tile-hoverable:hover {
+    background: var(--bg-secondary);
+}
+
+.tile-tooltip {
+    display: none;
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.5rem;
+    min-width: 140px;
+    z-index: 100;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    margin-top: 4px;
+}
+
+.tile-hoverable:hover .tile-tooltip {
+    display: block;
+}
+
+.tooltip-title {
+    font-size: 0.65rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 0.375rem;
+    padding-bottom: 0.25rem;
+    border-bottom: 1px solid var(--border);
+}
+
+.tooltip-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.125rem 0;
+    font-size: 0.75rem;
+}
+
+.tooltip-name {
+    color: var(--text-secondary);
+}
+
+.tooltip-value {
+    color: var(--primary);
+    font-weight: 600;
 }
 
 .tile-wide {

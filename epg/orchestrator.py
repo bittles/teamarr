@@ -17,6 +17,7 @@ from utils.logger import get_logger
 from database import get_connection
 from api.espn_client import ESPNClient
 from epg.template_engine import TemplateEngine
+from epg.league_config import SoccerCompat
 
 logger = get_logger(__name__)
 
@@ -578,11 +579,20 @@ class EPGOrchestrator:
 
         # Parse events using epg_start_datetime as the cutoff (single source of truth)
         logger.debug(f"Parsing events with cutoff_past_datetime={epg_start_datetime.strftime('%Y-%m-%d %H:%M %Z')}")
-        events = self.espn.parse_schedule_events(schedule_data, days_ahead, cutoff_past_datetime=epg_start_datetime)
+        schedule_events = self.espn.parse_schedule_events(schedule_data, days_ahead, cutoff_past_datetime=epg_start_datetime)
 
-        # Enrich today's games with scoreboard data (odds, conferenceCompetition, etc.)
+        # Unified scoreboard integration: discover missing events AND enrich existing ones
+        # This handles soccer leagues (where schedule API returns no future games) and
+        # enriches all leagues with live data (odds, broadcasts, scores)
         api_counter = {'count': self.api_calls}
-        events = self._enrich_with_scoreboard(events, team, api_counter, epg_timezone)
+        events = self._discover_and_enrich_from_scoreboard(
+            schedule_events,
+            team,
+            days_ahead,
+            api_counter,
+            epg_timezone,
+            epg_start_datetime
+        )
         self.api_calls = api_counter['count']
 
         # Parse extended events (for context only - look back 30 days for last game info)
@@ -661,78 +671,129 @@ class EPGOrchestrator:
 
         return combined_events
 
-    def _enrich_with_scoreboard(
+    def _discover_and_enrich_from_scoreboard(
         self,
-        events: List[dict],
+        schedule_events: List[dict],
         team: dict,
+        days_ahead: int,
         api_calls_counter: dict,
-        epg_timezone: str = 'America/Detroit'
+        epg_timezone: str = 'America/Detroit',
+        epg_start_datetime: datetime = None
     ) -> List[dict]:
         """
-        Enrich today's games with scoreboard data (odds, conferenceCompetition, etc.)
+        Unified scoreboard integration: discover missing events AND enrich existing ones.
+
+        This method solves two problems in one pass:
+        1. DISCOVERY: Some leagues (all soccer) have schedule APIs that only return past
+           results, not future fixtures. The scoreboard API has upcoming games.
+        2. ENRICHMENT: Scoreboard provides live data (odds, broadcasts, scores) that
+           schedule API doesn't have.
 
         Args:
-            events: List of parsed schedule events
-            team: Team configuration dict
+            schedule_events: Events from schedule API (may be empty for soccer leagues)
+            team: Team configuration dict with espn_team_id
+            days_ahead: Number of days in EPG window
             api_calls_counter: Dict with 'count' key to track API calls
-            epg_timezone: User's EPG timezone
+            epg_timezone: User's EPG timezone for date calculations
+            epg_start_datetime: EPG start time for filtering events
 
         Returns:
-            List of enriched events (today's games have scoreboard data merged)
+            Combined list of events (discovered + enriched), sorted by date
         """
-        # Determine correct API path (sport/league) for ESPN API calls
         api_sport, api_league = self._get_api_path(team)
-
-        # Get today's date string in USER'S timezone (not UTC!)
+        team_id = str(team.get('espn_team_id', ''))
+        team_name = team.get('team_name', 'team')
         user_tz = ZoneInfo(epg_timezone)
-        today_str = datetime.now(user_tz).strftime('%Y%m%d')
 
-        # Check if any events are today (in user's timezone)
-        has_today_games = False
-        for event in events:
-            try:
-                # Parse UTC event date and convert to user's timezone
-                event_date_utc = datetime.fromisoformat(event['date'].replace('Z', '+00:00'))
-                event_date_local = event_date_utc.astimezone(user_tz)
-                event_date_str = event_date_local.strftime('%Y%m%d')
+        # Build lookup of existing events by ID
+        events_by_id = {e['id']: e for e in schedule_events}
+        initial_count = len(events_by_id)
 
-                if event_date_str == today_str:
-                    has_today_games = True
-                    break
-            except Exception as e:
-                logger.debug(f"Error checking event date: {e}")
+        # Determine date range to fetch
+        now_local = datetime.now(user_tz)
+        if epg_start_datetime:
+            start_local = epg_start_datetime.astimezone(user_tz)
+        else:
+            start_local = now_local
+
+        # Stats for logging
+        discovered_count = 0
+        enriched_count = 0
+
+        # Fetch scoreboard for each day in the EPG window
+        for day_offset in range(days_ahead):
+            check_date = start_local + timedelta(days=day_offset)
+            date_str = check_date.strftime('%Y%m%d')
+
+            scoreboard_data = self.espn.get_scoreboard(api_sport, api_league, date_str)
+            api_calls_counter['count'] += 1
+
+            if not scoreboard_data or 'events' not in scoreboard_data:
                 continue
 
-        # If no today's games, return unchanged
-        if not has_today_games:
-            logger.debug(f"No today's games for {team.get('team_name', 'team')}, skipping scoreboard enrichment")
-            return events
+            # Parse scoreboard events for this day
+            # Use _parse_event directly since we already control the date via the loop
+            # (parse_schedule_events would filter by date which is redundant here)
+            scoreboard_events = []
+            for raw_event in scoreboard_data.get('events', []):
+                parsed = self.espn._parse_event(raw_event)
+                if parsed:
+                    scoreboard_events.append(parsed)
 
-        # Fetch scoreboard for today
-        logger.info(f"Fetching scoreboard for {team.get('team_name', 'team')} (today: {today_str} in {epg_timezone})")
-        scoreboard_data = self.espn.get_scoreboard(api_sport, api_league, today_str)
-        api_calls_counter['count'] += 1
+            for sb_event in scoreboard_events:
+                # Check if our team is playing in this event
+                if not self._team_is_playing(sb_event, team_id):
+                    continue
 
-        if not scoreboard_data or 'events' not in scoreboard_data:
-            return events
+                event_id = sb_event.get('id')
+                if not event_id:
+                    continue
 
-        # Parse scoreboard events
-        scoreboard_events = self.espn.parse_schedule_events(scoreboard_data, 1)
-        logger.info(f"Found {len(scoreboard_events)} scoreboard events")
+                if event_id in events_by_id:
+                    # ENRICHMENT: Event exists in schedule, merge scoreboard data
+                    # Set odds flag only for today's games
+                    is_today = date_str == now_local.strftime('%Y%m%d')
+                    if self._enrich_event_from_scoreboard_lookup(
+                        events_by_id[event_id],
+                        {event_id: sb_event},
+                        normalize_broadcasts=True,
+                        set_odds_flag=is_today
+                    ):
+                        enriched_count += 1
+                else:
+                    # DISCOVERY: New event not in schedule, add it
+                    # This handles soccer leagues where schedule API returns no future games
+                    events_by_id[event_id] = sb_event
+                    discovered_count += 1
+                    logger.debug(f"Discovered event via scoreboard: {sb_event.get('name')} on {sb_event.get('date')}")
 
-        # Create lookup by event ID
-        scoreboard_lookup = {e['id']: e for e in scoreboard_events}
+        # Log summary
+        if discovered_count > 0:
+            logger.info(f"Discovered {discovered_count} events via scoreboard for {team_name} "
+                       f"(schedule had {initial_count})")
+        if enriched_count > 0:
+            logger.info(f"Enriched {enriched_count} events with scoreboard data for {team_name}")
 
-        # Merge scoreboard data into schedule events
-        enriched_count = 0
-        for event in events:
-            # Enrich using helper function (set odds flag for today's games)
-            if self._enrich_event_from_scoreboard_lookup(event, scoreboard_lookup, normalize_broadcasts=True, set_odds_flag=True):
-                logger.debug(f"Enriched event {event.get('id')}: has_odds={event.get('has_odds', False)}")
-                enriched_count += 1
+        # Convert back to list and sort by date
+        result = list(events_by_id.values())
+        result.sort(key=lambda e: e.get('date', ''))
 
-        logger.info(f"Enriched {enriched_count}/{len(events)} events with scoreboard data")
-        return events
+        return result
+
+    def _team_is_playing(self, event: dict, team_id: str) -> bool:
+        """
+        Check if a team is participating in an event.
+
+        Args:
+            event: Parsed event dict with home_team and away_team
+            team_id: ESPN team ID to check for
+
+        Returns:
+            True if team is home or away in this event
+        """
+        home_id = str(event.get('home_team', {}).get('id', ''))
+        away_id = str(event.get('away_team', {}).get('id', ''))
+        return team_id == home_id or team_id == away_id
 
     def _enrich_past_events_with_scores(
         self,
@@ -963,11 +1024,21 @@ class EPGOrchestrator:
 
         # Enrich NEXT event with scoreboard data (for odds, broadcasts, etc.)
         if next_event:
-            api_counter = {'count': self.api_calls}
-            enriched = self._enrich_with_scoreboard([next_event], team, api_counter, epg_timezone)
-            if enriched:
-                next_event = enriched[0]
-            self.api_calls = api_counter['count']
+            api_sport, api_league = self._get_api_path(team)
+            next_date_str = next_event.get('date', '')
+            if next_date_str:
+                try:
+                    next_dt = datetime.fromisoformat(next_date_str.replace('Z', '+00:00'))
+                    date_str = next_dt.strftime('%Y%m%d')
+                    enriched = self._fetch_and_enrich_event_with_scoreboard(
+                        next_event, date_str, api_sport, api_league,
+                        normalize_broadcasts=True, set_odds_flag=True
+                    )
+                    if enriched:
+                        next_event = enriched
+                    self.api_calls += 1
+                except Exception as e:
+                    logger.debug(f"Error enriching next event: {e}")
 
         # Build NEXT game context
         next_context = self._build_full_game_context(
@@ -1682,23 +1753,40 @@ class EPGOrchestrator:
                 if not status.get('completed', False):
                     continue
 
-                # Find our team in competitors
+                # Find our team and opponent in competitors
                 competitors = comp.get('competitors', [])
                 our_team = None
+                opponent = None
                 for c in competitors:
                     if str(c.get('team', {}).get('id')) == str(our_team_id):
                         our_team = c
-                        break
+                    else:
+                        opponent = c
 
                 if not our_team:
                     continue
 
+                # Determine result: win, loss, or draw
+                # For draws in soccer, both teams have winner=False
+                won = our_team.get('winner', False)
+                opponent_won = opponent.get('winner', False) if opponent else False
+
+                # It's a draw if neither team won
+                is_draw = not won and not opponent_won
+
                 # Categorize by home/away
                 home_away = our_team.get('homeAway', '').lower()
-                won = our_team.get('winner', False)
                 game_date = event.get('date', '')
 
-                game_data = {'date': game_date, 'won': won}
+                # result: 'W' for win, 'L' for loss, 'D' for draw
+                if won:
+                    result = 'W'
+                elif is_draw:
+                    result = 'D'
+                else:
+                    result = 'L'
+
+                game_data = {'date': game_date, 'won': won, 'result': result}
                 all_games.append(game_data)
 
                 if home_away == 'home':
@@ -1710,43 +1798,58 @@ class EPGOrchestrator:
                 continue
 
         # Helper to calculate streak
+        # Streaks are consecutive wins or losses; draws break streaks
         def calc_streak(games, location_text):
             if not games:
                 return ""
 
             games.sort(key=lambda x: x['date'], reverse=True)
-            is_winning = games[0]['won']
-            count = 0
 
+            # Get the result of the most recent game
+            first_result = games[0].get('result', 'L')
+
+            # Draws don't count as a streak - check for consecutive W or L only
+            if first_result == 'D':
+                # Most recent game was a draw, no active streak
+                return ""
+
+            count = 0
             for game in games:
-                if game['won'] == is_winning:
+                result = game.get('result', 'L')
+                if result == first_result:
                     count += 1
                 else:
+                    # Draw or opposite result breaks the streak
                     break
 
             # Return streak in W/L format (W3 = 3 wins, L2 = 2 losses)
-            # Always show streak, even if count is 1
-            if is_winning:
-                return f"W{count}"
+            return f"{first_result}{count}"
+
+        # Helper to calculate W-L or W-D-L record
+        def calc_record(games):
+            wins = sum(1 for g in games if g.get('result') == 'W')
+            losses = sum(1 for g in games if g.get('result') == 'L')
+            draws = sum(1 for g in games if g.get('result') == 'D')
+
+            if draws > 0:
+                # Soccer-style: W-D-L
+                return f"{wins}-{draws}-{losses}"
             else:
-                return f"L{count}"
+                # US sports: W-L
+                return f"{wins}-{losses}"
 
         # Calculate last 5 and last 10 records
         all_games.sort(key=lambda x: x['date'], reverse=True)
 
         last_5 = all_games[:5]
         if len(last_5) >= 5:
-            wins_5 = sum(1 for g in last_5 if g['won'])
-            losses_5 = 5 - wins_5
-            last_5_record = f"{wins_5}-{losses_5}"
+            last_5_record = calc_record(last_5)
         else:
             last_5_record = ''
 
         last_10 = all_games[:10]
         if len(last_10) >= 10:
-            wins_10 = sum(1 for g in last_10 if g['won'])
-            losses_10 = 10 - wins_10
-            last_10_record = f"{wins_10}-{losses_10}"
+            last_10_record = calc_record(last_10)
         else:
             last_10_record = ''
 
@@ -1759,12 +1862,18 @@ class EPGOrchestrator:
 
     def _get_head_coach(self, team_id: str, league: str) -> str:
         """Fetch head coach name from roster API"""
+        # ESPN's soccer coach data is completely unreliable - returns wrong managers
+        # or managers who never even worked at those clubs. Skip for soccer leagues.
+        if SoccerCompat.should_skip_coach(league):
+            return ''
+
         try:
             url = f"{self.espn.base_url}/{league}/teams/{team_id}/roster"
             roster_data = self.espn._make_request(url)
 
             if roster_data and 'coach' in roster_data and roster_data['coach']:
-                coach = roster_data['coach'][0]
+                coaches = roster_data['coach']
+                coach = coaches[0]
                 first = coach.get('firstName', '')
                 last = coach.get('lastName', '')
                 return f"{first} {last}".strip()

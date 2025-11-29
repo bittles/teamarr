@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
 import time
 from utils.logger import get_logger
+from epg.league_config import SoccerCompat
 
 logger = get_logger(__name__)
 
@@ -242,6 +243,38 @@ class ESPNClient:
         if away_rec:
             stats['away_record'] = away_rec.get('summary', '0-0')
 
+        # Fallback: Build home/away records from stats in total record (needed for soccer)
+        # Soccer leagues don't have separate home/road record items, but the stats exist
+        # Check if overall record uses W-D-L format (3 parts) to maintain consistency
+        overall_summary = stats['record'].get('summary', '0-0')
+        uses_draws = len(overall_summary.split('-')) == 3
+
+        if stats['home_record'] == '0-0' and overall:
+            home_wins = int(stat_dict.get('homeWins', 0))
+            home_losses = int(stat_dict.get('homeLosses', 0))
+            home_ties = int(stat_dict.get('homeTies', 0))
+            if home_wins or home_losses or home_ties:
+                if uses_draws:
+                    # Soccer: W-D-L format (draws in middle)
+                    stats['home_record'] = f"{home_wins}-{home_ties}-{home_losses}"
+                elif home_ties > 0:
+                    stats['home_record'] = f"{home_wins}-{home_losses}-{home_ties}"
+                else:
+                    stats['home_record'] = f"{home_wins}-{home_losses}"
+
+        if stats['away_record'] == '0-0' and overall:
+            away_wins = int(stat_dict.get('awayWins', 0))
+            away_losses = int(stat_dict.get('awayLosses', 0))
+            away_ties = int(stat_dict.get('awayTies', 0))
+            if away_wins or away_losses or away_ties:
+                if uses_draws:
+                    # Soccer: W-D-L format (draws in middle)
+                    stats['away_record'] = f"{away_wins}-{away_ties}-{away_losses}"
+                elif away_ties > 0:
+                    stats['away_record'] = f"{away_wins}-{away_losses}-{away_ties}"
+                else:
+                    stats['away_record'] = f"{away_wins}-{away_losses}"
+
         # Get division record (type='division') - may not exist for all sports
         div_rec = next((r for r in record_items if r.get('type') == 'division'), None)
         if div_rec:
@@ -291,45 +324,48 @@ class ESPNClient:
         #    - Pro sports: Use division (more specific for fan interest)
         #    - College: Use conference (divisions less relevant)
         #
-        groups = team_data['team'].get('groups', {})
-        division_id = groups.get('id', '')
-        conference_id = groups.get('parent', {}).get('id', '')
-        is_conference = groups.get('isConference', False)
+        # Skip division/conference lookup for soccer - they don't have meaningful
+        # divisions/conferences and the API returns stale/garbage data
+        if not SoccerCompat.should_skip_division(league):
+            groups = team_data['team'].get('groups', {})
+            division_id = groups.get('id', '')
+            conference_id = groups.get('parent', {}).get('id', '')
+            is_conference = groups.get('isConference', False)
 
-        # If groups.id is actually the conference (no parent), use it directly
-        if is_conference and division_id:
-            conference_name, conference_abbrev = self._get_group_name(sport, league, division_id)
-            if conference_name:
-                stats['conference_id'] = division_id
-                stats['conference_name'] = conference_name
-                stats['conference_abbrev'] = conference_abbrev
-        else:
-            # Fetch division name (if exists and not a conference)
-            if division_id:
-                division_name, division_abbrev = self._get_group_name(sport, league, division_id)
-                if division_name:
-                    stats['division_id'] = division_id
-                    stats['division_name'] = division_name
-                    stats['division_abbrev'] = division_abbrev
-
-            # Fetch parent conference name
-            if conference_id:
-                conference_name, conference_abbrev = self._get_group_name(sport, league, conference_id)
+            # If groups.id is actually the conference (no parent), use it directly
+            if is_conference and division_id:
+                conference_name, conference_abbrev = self._get_group_name(sport, league, division_id)
                 if conference_name:
-                    stats['conference_id'] = conference_id
-                    stats['conference_full_name'] = conference_name
+                    stats['conference_id'] = division_id
+                    stats['conference_name'] = conference_name
                     stats['conference_abbrev'] = conference_abbrev
+            else:
+                # Fetch division name (if exists and not a conference)
+                if division_id:
+                    division_name, division_abbrev = self._get_group_name(sport, league, division_id)
+                    if division_name:
+                        stats['division_id'] = division_id
+                        stats['division_name'] = division_name
+                        stats['division_abbrev'] = division_abbrev
 
-                    # For {conference_or_division_name} variable:
-                    # - Pro sports (NFL/NBA): prefer division name (more specific)
-                    # - College: prefer conference name (divisions are less meaningful)
-                    # Heuristic: if league contains 'college', use conference; otherwise use division
-                    if 'college' in league.lower():
-                        stats['conference_name'] = conference_name
-                    elif division_id:
-                        stats['conference_name'] = stats.get('division_name', conference_name)
-                    else:
-                        stats['conference_name'] = conference_name
+                # Fetch parent conference name
+                if conference_id:
+                    conference_name, conference_abbrev = self._get_group_name(sport, league, conference_id)
+                    if conference_name:
+                        stats['conference_id'] = conference_id
+                        stats['conference_full_name'] = conference_name
+                        stats['conference_abbrev'] = conference_abbrev
+
+                        # For {conference_or_division_name} variable:
+                        # - Pro sports (NFL/NBA): prefer division name (more specific)
+                        # - College: prefer conference name (divisions are less meaningful)
+                        # Heuristic: if league contains 'college', use conference; otherwise use division
+                        if 'college' in league.lower():
+                            stats['conference_name'] = conference_name
+                        elif division_id:
+                            stats['conference_name'] = stats.get('division_name', conference_name)
+                        else:
+                            stats['conference_name'] = conference_name
 
         # Cache the result
         self._stats_cache[cache_key] = (stats, datetime.now())
@@ -442,11 +478,11 @@ class ESPNClient:
                     'record': self._extract_record(away_team.get('record', [])),
                 },
 
-                # Venue
+                # Venue (handle international venues which may not have state/address)
                 'venue': {
-                    'name': competition['venue']['fullName'] if 'venue' in competition else None,
-                    'city': competition['venue']['address']['city'] if 'venue' in competition and 'address' in competition['venue'] else None,
-                    'state': competition['venue']['address']['state'] if 'venue' in competition and 'address' in competition['venue'] else None,
+                    'name': competition.get('venue', {}).get('fullName'),
+                    'city': competition.get('venue', {}).get('address', {}).get('city'),
+                    'state': competition.get('venue', {}).get('address', {}).get('state'),
                 },
 
                 # Broadcast

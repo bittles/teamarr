@@ -279,6 +279,9 @@ def refresh_event_group_core(group, m3u_manager):
                         elif normalized == FilterReason.GAME_PAST:
                             # Game from a previous day
                             filtered_outside_lookahead += 1
+                        elif normalized == FilterReason.NO_GAME_FOUND:
+                            # No event found for these teams in lookahead window
+                            filtered_outside_lookahead += 1
 
             except Exception as e:
                 app.logger.warning(f"Error matching stream '{stream['name']}': {e}")
@@ -339,8 +342,15 @@ def refresh_event_group_core(group, m3u_manager):
             # Use settings output path to derive data directory (keeps all files together)
             output_path = settings.get('epg_output_path', '/app/data/teamarr.xml')
 
+            # Sort matched streams by event start time (earliest first)
+            # This ensures channels appear in chronological order in the EPG
+            sorted_matched = sorted(
+                matched_streams,
+                key=lambda m: m['event'].get('date', '') or ''
+            )
+
             epg_result = generate_event_epg(
-                matched_streams=matched_streams,
+                matched_streams=sorted_matched,
                 group_info=group,
                 save=True,
                 data_dir=get_data_dir(output_path),
@@ -389,9 +399,16 @@ def refresh_event_group_core(group, m3u_manager):
                     if update_results['updated']:
                         app.logger.debug(f"Updated {len(update_results['updated'])} channel delete times")
 
+                    # Sort matched streams by event start time (earliest first)
+                    # This ensures channels are numbered chronologically
+                    sorted_matched = sorted(
+                        matched_streams,
+                        key=lambda m: m['event'].get('date', '') or ''
+                    )
+
                     # Create new channels for matched streams
                     channel_results = lifecycle_mgr.process_matched_streams(
-                        matched_streams=matched_streams,
+                        matched_streams=sorted_matched,
                         group=group,
                         template=event_template
                     )
@@ -750,7 +767,7 @@ def generate_all_epg(progress_callback=None, settings=None, save_history=True, t
                     # Pattern: Look up EPGData by tvg_id, call set_channel_epg()
                     report_progress('progress', 'Associating EPG with managed channels...', 99)
                     try:
-                        # Give Dispatcharr a moment to process the EPG data
+                        # Give Dispatcharr time to process the EPG data
                         import time
                         time.sleep(2)
 
@@ -2234,6 +2251,124 @@ def api_epg_stats():
         })
     except Exception as e:
         app.logger.error(f"Error getting EPG stats: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@app.route('/api/epg-stats/live', methods=['GET'])
+def api_epg_stats_live():
+    """
+    Get live game statistics from the EPG.
+
+    Parses the generated EPG XML and compares event times to current datetime
+    to calculate:
+    - games_today: Events scheduled for today
+    - live_now: Events currently in progress (started but not ended)
+
+    Query params:
+        type: 'team' or 'event' (default: both)
+    """
+    import xml.etree.ElementTree as ET
+    from datetime import datetime
+    import pytz
+
+    try:
+        # Get settings for timezone and EPG path
+        conn = get_connection()
+        settings = dict(conn.execute("SELECT * FROM settings WHERE id = 1").fetchone())
+        conn.close()
+
+        epg_path = settings.get('epg_output_path', './data/teamarr.xml')
+        user_tz = pytz.timezone(settings.get('default_timezone', 'America/Detroit'))
+        now = datetime.now(user_tz)
+        today = now.date()
+
+        stats = {
+            'team': {'games_today': 0, 'live_now': 0, 'today_events': []},
+            'event': {'games_today': 0, 'live_now': 0, 'today_events': []}
+        }
+
+        # Check if EPG file exists
+        if not os.path.exists(epg_path):
+            return jsonify({'success': True, 'stats': stats, 'message': 'No EPG file found'})
+
+        # Parse the EPG XML
+        tree = ET.parse(epg_path)
+        root = tree.getroot()
+
+        # Parse XMLTV datetime format: YYYYMMDDHHmmss +ZZZZ
+        def parse_xmltv_time(time_str):
+            if not time_str:
+                return None
+            try:
+                # Handle format like "20251129220000 -0500"
+                parts = time_str.split()
+                dt_str = parts[0]
+                tz_str = parts[1] if len(parts) > 1 else '+0000'
+
+                dt = datetime.strptime(dt_str, '%Y%m%d%H%M%S')
+
+                # Parse timezone offset
+                tz_sign = 1 if tz_str[0] == '+' else -1
+                tz_hours = int(tz_str[1:3])
+                tz_mins = int(tz_str[3:5])
+                from datetime import timedelta
+                tz_offset = timedelta(hours=tz_sign * tz_hours, minutes=tz_sign * tz_mins)
+                dt = dt.replace(tzinfo=pytz.FixedOffset(int(tz_offset.total_seconds() / 60)))
+
+                return dt.astimezone(user_tz)
+            except Exception:
+                return None
+
+        # Process each programme element
+        for programme in root.findall('.//programme'):
+            channel_id = programme.get('channel', '')
+            start_str = programme.get('start')
+            stop_str = programme.get('stop')
+            title_elem = programme.find('title')
+            title = title_elem.text if title_elem is not None else ''
+
+            start_time = parse_xmltv_time(start_str)
+            stop_time = parse_xmltv_time(stop_str)
+
+            if not start_time or not stop_time:
+                continue
+
+            # Determine if team-based or event-based channel
+            is_event = channel_id.startswith('teamarr-event-')
+            stat_key = 'event' if is_event else 'team'
+
+            # Skip filler programmes (pregame, postgame, idle)
+            # Game programmes typically have team names with vs/@
+            is_game = 'vs' in title.lower() or '@' in title or ' at ' in title.lower()
+            if not is_game:
+                continue
+
+            start_date = start_time.date()
+
+            # Games Today: events scheduled for today
+            if start_date == today:
+                stats[stat_key]['games_today'] += 1
+                stats[stat_key]['today_events'].append({
+                    'title': title,
+                    'start': start_time.strftime('%I:%M %p'),
+                    'channel': channel_id
+                })
+
+                # Live Now: currently in progress
+                if start_time <= now <= stop_time:
+                    stats[stat_key]['live_now'] += 1
+
+        return jsonify({
+            'success': True,
+            'stats': stats,
+            'current_time': now.strftime('%Y-%m-%d %H:%M:%S %Z')
+        })
+
+    except Exception as e:
+        app.logger.error(f"Error getting live EPG stats: {e}")
         return jsonify({
             'success': False,
             'error': str(e)

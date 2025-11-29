@@ -355,11 +355,18 @@ class TemplateEngine:
             opp_record = opponent.get('record', {})
 
         # Team record
+        # Use ESPN's summary field directly - it has the correct format for each sport:
+        # - US sports: W-L or W-L-T
+        # - Soccer: W-D-L (wins-draws-losses)
         wins = record.get('wins', 0)
         losses = record.get('losses', 0)
         ties = record.get('ties', 0)
 
-        if ties > 0:
+        # Use summary if available, otherwise reconstruct (fallback for edge cases)
+        record_summary = record.get('summary', '')
+        if record_summary and record_summary != '0-0':
+            variables['team_record'] = record_summary
+        elif ties > 0:
             variables['team_record'] = f"{wins}-{losses}-{ties}"
         else:
             variables['team_record'] = f"{wins}-{losses}"
@@ -374,7 +381,11 @@ class TemplateEngine:
         opp_losses = opp_record.get('losses', 0)
         opp_ties = opp_record.get('ties', 0)
 
-        if opp_ties > 0:
+        # Use summary if available, otherwise reconstruct
+        opp_record_summary = opp_record.get('summary', '')
+        if opp_record_summary and opp_record_summary != '0-0':
+            variables['opponent_record'] = opp_record_summary
+        elif opp_ties > 0:
             variables['opponent_record'] = f"{opp_wins}-{opp_losses}-{opp_ties}"
         else:
             variables['opponent_record'] = f"{opp_wins}-{opp_losses}"

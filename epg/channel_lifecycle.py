@@ -620,6 +620,7 @@ class ChannelLifecycleManager:
         | current_stream      | streams           | M3U ID lookup               |
         | group               | channel_profile_id| Add/remove via profile API  |
         | template            | logo_id           | Separate method (below)     |
+        | espn_event_id       | tvg_id            | Ensures EPG matching works  |
         +---------------------+-------------------+-----------------------------+
 
         When adding a new synced field:
@@ -718,6 +719,15 @@ class ChannelLifecycleManager:
             current_stream_profile_id = current_channel.get('stream_profile_id')
             if group_stream_profile_id != current_stream_profile_id:
                 update_data['stream_profile_id'] = group_stream_profile_id
+
+            # Check tvg_id - ensure EPG matching is always correct
+            espn_event_id = existing.get('espn_event_id')
+            if espn_event_id:
+                expected_tvg_id = generate_event_tvg_id(espn_event_id)
+                current_tvg_id = current_channel.get('tvg_id')
+                if expected_tvg_id != current_tvg_id:
+                    update_data['tvg_id'] = expected_tvg_id
+                    logger.debug(f"Syncing tvg_id: {current_tvg_id} -> {expected_tvg_id}")
 
             # Check stream assignment - M3U stream IDs can change on refresh
             if current_stream:

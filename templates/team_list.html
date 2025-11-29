@@ -25,7 +25,7 @@
         {% set team_stats = namespace(total=0, enabled=0, by_league={}) %}
         {% for team in teams %}
             {% set team_stats.total = team_stats.total + 1 %}
-            {% if team.is_active %}
+            {% if team.active %}
                 {% set team_stats.enabled = team_stats.enabled + 1 %}
             {% endif %}
             {% set league = team.league %}
@@ -33,7 +33,7 @@
                 {% set _ = team_stats.by_league.update({league: {'total': 0, 'enabled': 0}}) %}
             {% endif %}
             {% set _ = team_stats.by_league[league].update({'total': team_stats.by_league[league].total + 1}) %}
-            {% if team.is_active %}
+            {% if team.active %}
                 {% set _ = team_stats.by_league[league].update({'enabled': team_stats.by_league[league].enabled + 1}) %}
             {% endif %}
         {% endfor %}
@@ -68,24 +68,28 @@
                 </div>
             </div>
 
-            <div class="stat-tile stat-tile-placeholder" data-tooltip-id="tooltip-games-today">
-                <div class="stat-value">--</div>
+            <div class="stat-tile" data-tooltip-id="tooltip-games-today" id="tile-games-today">
+                <div class="stat-value" id="games-today-value">--</div>
                 <div class="stat-label">Games Today</div>
                 <div class="stat-tooltip" id="tooltip-games-today">
-                    <div class="tooltip-title">Coming Soon</div>
-                    <div class="tooltip-row">
-                        <span class="tooltip-name" style="font-style: italic;">Run EPG generation to populate</span>
+                    <div class="tooltip-title">Today's Games</div>
+                    <div id="games-today-list">
+                        <div class="tooltip-row">
+                            <span class="tooltip-name" style="font-style: italic;">Loading...</span>
+                        </div>
                     </div>
                 </div>
             </div>
 
-            <div class="stat-tile stat-tile-placeholder" data-tooltip-id="tooltip-live-now">
-                <div class="stat-value">--</div>
+            <div class="stat-tile" data-tooltip-id="tooltip-live-now" id="tile-live-now">
+                <div class="stat-value" id="live-now-value">--</div>
                 <div class="stat-label">Live Now</div>
                 <div class="stat-tooltip" id="tooltip-live-now">
-                    <div class="tooltip-title">Coming Soon</div>
-                    <div class="tooltip-row">
-                        <span class="tooltip-name" style="font-style: italic;">Run EPG generation to populate</span>
+                    <div class="tooltip-title">Live Games</div>
+                    <div id="live-now-list">
+                        <div class="tooltip-row">
+                            <span class="tooltip-name" style="font-style: italic;">Loading...</span>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -610,6 +614,58 @@ async function bulkDelete() {
         alert('Error: ' + error.message);
     }
 }
+
+// Load live game stats from EPG
+async function loadLiveStats() {
+    try {
+        const response = await fetch('/api/epg-stats/live');
+        const result = await response.json();
+
+        if (result.success) {
+            const teamStats = result.stats.team;
+
+            // Update Games Today
+            document.getElementById('games-today-value').textContent = teamStats.games_today;
+
+            // Update Live Now
+            document.getElementById('live-now-value').textContent = teamStats.live_now;
+
+            // Update tooltips
+            const gamesTodayList = document.getElementById('games-today-list');
+            if (teamStats.today_events.length > 0) {
+                gamesTodayList.innerHTML = teamStats.today_events.slice(0, 5).map(e =>
+                    `<div class="tooltip-row">
+                        <span class="tooltip-name">${e.start}</span>
+                        <span class="tooltip-value" style="font-size: 0.65rem; max-width: 100px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${e.title}</span>
+                    </div>`
+                ).join('');
+                if (teamStats.today_events.length > 5) {
+                    gamesTodayList.innerHTML += `<div class="tooltip-row"><span class="tooltip-name" style="font-style: italic;">+${teamStats.today_events.length - 5} more</span></div>`;
+                }
+            } else {
+                gamesTodayList.innerHTML = '<div class="tooltip-row"><span class="tooltip-name" style="font-style: italic;">No games today</span></div>';
+            }
+
+            const liveNowList = document.getElementById('live-now-list');
+            const liveEvents = teamStats.today_events.filter((_, i) => i < teamStats.live_now);
+            if (teamStats.live_now > 0) {
+                liveNowList.innerHTML = `<div class="tooltip-row"><span class="tooltip-name" style="font-style: italic;">${teamStats.live_now} game(s) in progress</span></div>`;
+            } else {
+                liveNowList.innerHTML = '<div class="tooltip-row"><span class="tooltip-name" style="font-style: italic;">No games live</span></div>';
+            }
+        } else {
+            document.getElementById('games-today-value').textContent = '0';
+            document.getElementById('live-now-value').textContent = '0';
+        }
+    } catch (error) {
+        console.error('Error loading live stats:', error);
+        document.getElementById('games-today-value').textContent = '0';
+        document.getElementById('live-now-value').textContent = '0';
+    }
+}
+
+// Load stats on page load
+loadLiveStats();
 </script>
 
 <style>

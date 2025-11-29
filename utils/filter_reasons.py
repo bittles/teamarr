@@ -133,7 +133,8 @@ def is_excluded_from_count(reason: str) -> bool:
     Check if a reason should exclude the stream from the match rate denominator.
 
     Streams that match this criteria are not "failures to match" - they're
-    streams where matching isn't applicable (past games, finals when excluded).
+    streams where matching isn't applicable (past games, finals when excluded,
+    or no event found in the lookahead window).
 
     Args:
         reason: Filter reason constant or internal reason string
@@ -145,6 +146,7 @@ def is_excluded_from_count(reason: str) -> bool:
     return normalized in (
         FilterReason.GAME_PAST,
         FilterReason.GAME_FINAL_EXCLUDED,
+        FilterReason.NO_GAME_FOUND,  # No event in lookahead range
     )
 
 
@@ -154,4 +156,5 @@ DB_COLUMN_MAPPING = {
     FilterReason.EXCLUDE_REGEX_MATCHED: 'filtered_exclude_regex',
     FilterReason.GAME_PAST: 'filtered_outside_lookahead',
     FilterReason.GAME_FINAL_EXCLUDED: 'filtered_final',
+    FilterReason.NO_GAME_FOUND: 'filtered_outside_lookahead',  # Combined with GAME_PAST
 }

@@ -74,7 +74,7 @@ class EventMatcher:
         events: List[Dict],
         team2_id: str,
         include_final_events: bool
-    ) -> Tuple[List[Dict], bool]:
+    ) -> Tuple[List[Dict], Optional[str]]:
         """
         Filter schedule events to find games involving team2.
 
@@ -84,9 +84,9 @@ class EventMatcher:
             include_final_events: Whether to include completed events from today
 
         Returns:
-            Tuple of (matching_events, skipped_completed_game)
+            Tuple of (matching_events, skip_reason)
             - matching_events: List of {event, event_date, event_id} dicts
-            - skipped_completed_game: True if we skipped a completed game
+            - skip_reason: None, 'past_game', or 'today_final' indicating why game was skipped
         """
         now = datetime.now(ZoneInfo('UTC'))
         cutoff_past = now - timedelta(days=self.SEARCH_DAYS_BACK)
@@ -94,7 +94,7 @@ class EventMatcher:
         today = now.date()
 
         matching_events = []
-        skipped_completed_game = False
+        skip_reason = None  # 'past_game' or 'today_final'
 
         for event in events:
             try:
@@ -136,10 +136,10 @@ class EventMatcher:
                 if is_completed:
                     event_day = event_date.date()
                     if event_day < today:
-                        skipped_completed_game = True
+                        skip_reason = 'past_game'  # Game from a previous day
                         continue
                     elif event_day == today and not include_final_events:
-                        skipped_completed_game = True
+                        skip_reason = 'today_final'  # Today's game, but finals excluded
                         continue
 
                 # Found a matching game!
@@ -153,7 +153,7 @@ class EventMatcher:
                 logger.warning(f"Error parsing event: {e}")
                 continue
 
-        return matching_events, skipped_completed_game
+        return matching_events, skip_reason
 
     def _select_best_match(
         self,
@@ -218,7 +218,7 @@ class EventMatcher:
         sport: str,
         api_league: str,
         include_final_events: bool
-    ) -> Tuple[List[Dict], bool, Optional[str]]:
+    ) -> Tuple[List[Dict], Optional[str], Optional[str]]:
         """
         Search a team's schedule for games against an opponent.
 
@@ -230,20 +230,21 @@ class EventMatcher:
             include_final_events: Whether to include completed events
 
         Returns:
-            Tuple of (matching_events, skipped_completed, error_reason)
+            Tuple of (matching_events, skip_reason, error_reason)
+            - skip_reason: None, 'past_game', or 'today_final'
         """
         schedule_data = self.espn.get_team_schedule(sport, api_league, primary_team_id)
 
         if not schedule_data or 'events' not in schedule_data:
-            return [], False, f'Could not fetch schedule for team {primary_team_id}'
+            return [], None, f'Could not fetch schedule for team {primary_team_id}'
 
-        matching_events, skipped_completed = self._filter_matching_events(
+        matching_events, skip_reason = self._filter_matching_events(
             schedule_data.get('events', []),
             opponent_team_id,
             include_final_events
         )
 
-        return matching_events, skipped_completed, None
+        return matching_events, skip_reason, None
 
     def find_event(
         self,
@@ -292,14 +293,14 @@ class EventMatcher:
 
         # Try team1's schedule first
         logger.debug(f"Fetching schedule for team {team1_id} in {league}")
-        matching_events, skipped_completed, error = self._search_team_schedule(
+        matching_events, skip_reason, error = self._search_team_schedule(
             team1_id, team2_id, sport, api_league, include_final_events
         )
 
         # If no match found on team1's schedule, try team2's schedule as fallback
-        if not matching_events and not skipped_completed:
+        if not matching_events and not skip_reason:
             logger.debug(f"No match on team {team1_id} schedule, trying team {team2_id}")
-            matching_events, skipped_completed, error = self._search_team_schedule(
+            matching_events, skip_reason, error = self._search_team_schedule(
                 team2_id, team1_id, sport, api_league, include_final_events
             )
             if matching_events:
@@ -310,7 +311,13 @@ class EventMatcher:
             return result
 
         if not matching_events:
-            result['reason'] = 'Game completed (excluded)' if skipped_completed else 'No game found between teams'
+            # Provide specific reason based on why game was skipped
+            if skip_reason == 'past_game':
+                result['reason'] = 'Game already completed (past)'
+            elif skip_reason == 'today_final':
+                result['reason'] = 'Game completed (excluded)'
+            else:
+                result['reason'] = 'No game found between teams'
             return result
 
         # Sort by date and select best match

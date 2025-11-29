@@ -211,6 +211,7 @@ def refresh_event_group_core(group, m3u_manager):
 
         matched_count = 0
         matched_streams = []
+        final_excluded_count = 0  # Track streams excluded due to final events
 
         # Check if any individual custom regex fields are enabled
         teams_enabled = bool(group.get('custom_regex_teams_enabled'))
@@ -261,20 +262,26 @@ def refresh_event_group_core(group, m3u_manager):
                             'teams': team_result,
                             'event': event_result['event']
                         })
+                    elif event_result.get('reason') in ('Game completed (excluded)', 'Game already completed (past)'):
+                        # Don't count streams with final/past events in the denominator
+                        final_excluded_count += 1
 
             except Exception as e:
                 app.logger.warning(f"Error matching stream '{stream['name']}': {e}")
                 continue
 
-        # Update stats (use game stream count, not total)
+        # Update stats (exclude final-excluded streams from denominator when not including finals)
         game_stream_count = len(streams)
-        update_event_epg_group_stats(group_id, game_stream_count, matched_count)
+        effective_stream_count = game_stream_count - final_excluded_count
+        update_event_epg_group_stats(group_id, effective_stream_count, matched_count)
 
         # Log with filtering info
+        log_parts = [f"Matched {matched_count}/{effective_stream_count} streams for group '{group['group_name']}'"]
         if filtered_count > 0:
-            app.logger.debug(f"Matched {matched_count}/{game_stream_count} game streams for group '{group['group_name']}' ({filtered_count} non-game filtered)")
-        else:
-            app.logger.debug(f"Matched {matched_count}/{game_stream_count} streams for group '{group['group_name']}'")
+            log_parts.append(f"{filtered_count} non-game filtered")
+        if final_excluded_count > 0:
+            log_parts.append(f"{final_excluded_count} final events excluded")
+        app.logger.debug(" | ".join(log_parts))
 
         # Check if template is assigned
         if not group.get('event_template_id'):
@@ -2791,8 +2798,13 @@ def api_event_epg_dispatcharr_streams(group_id):
                                 reason = event_result.get('reason', 'No event found')
                                 # Provide clearer messages for common scenarios
                                 if reason == 'Game completed (excluded)':
+                                    # Today's final - excluded by user setting
                                     event_match_data['is_final'] = True
-                                    event_match_data['reason'] = 'Event is final'
+                                    event_match_data['reason'] = 'Event is final (excluded by setting)'
+                                elif reason == 'Game already completed (past)':
+                                    # Past game - always excluded regardless of setting
+                                    event_match_data['is_past'] = True
+                                    event_match_data['reason'] = 'Event already passed'
                                 elif reason == 'No game found between teams':
                                     event_match_data['reason'] = f'No event in lookahead range ({lookahead_days} days)'
                                 else:

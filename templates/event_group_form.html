@@ -142,7 +142,10 @@
 
             <div class="form-group">
                 <label for="channel_profile_id">Channel Profile</label>
-                <select id="channel_profile_id" name="channel_profile_id" class="form-control">
+                <div style="margin-bottom: 0.5rem;">
+                    <input type="text" id="channel-profile-filter" class="form-control" placeholder="Filter profiles..." oninput="filterChannelProfiles()">
+                </div>
+                <select id="channel_profile_id" name="channel_profile_id" class="form-control" size="4" style="height: auto;">
                     <option value="">Loading profiles...</option>
                 </select>
                 <small class="form-help">Add created channels to this profile. Leave blank to skip.</small>
@@ -550,6 +553,27 @@ function renderChannelProfiles() {
     });
 
     if (currentValue) {
+        select.value = currentValue;
+    }
+}
+
+function filterChannelProfiles() {
+    const filter = document.getElementById('channel-profile-filter').value.toLowerCase();
+    const select = document.getElementById('channel_profile_id');
+    const currentValue = select.value;
+
+    select.innerHTML = '';
+
+    channelProfiles.forEach(profile => {
+        if (profile.name.toLowerCase().includes(filter)) {
+            const option = document.createElement('option');
+            option.value = profile.id;
+            option.textContent = profile.name;
+            select.appendChild(option);
+        }
+    });
+
+    if (currentValue && select.querySelector(`option[value="${currentValue}"]`)) {
         select.value = currentValue;
     }
 }

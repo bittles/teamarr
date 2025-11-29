@@ -717,9 +717,12 @@ function renderPreviewStreams(streams, totalCount, filteredCount) {
             statusHtml = `<span class="text-muted" style="font-style: italic;">${escapeHtml(reason)}</span>`;
         } else if (eventMatch.found) {
             statusHtml = `<span class="text-success">✓ Matched</span>`;
+        } else if (eventMatch.is_past) {
+            // Event from a past day - always excluded
+            statusHtml = `<span class="text-muted" style="font-style: italic;">Event already passed</span>`;
         } else if (eventMatch.is_final) {
-            // Event found but is final
-            statusHtml = `<span class="text-danger" style="font-weight: 600;">Event is final</span>`;
+            // Today's event but final - excluded by user setting
+            statusHtml = `<span class="text-danger" style="font-weight: 600;">Event is final (excluded)</span>`;
         } else if (!teamMatch.matched) {
             // Team parsing failed
             statusHtml = `<span class="text-warning">Teams not parsed</span>`;

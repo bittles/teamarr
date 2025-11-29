@@ -793,7 +793,9 @@ def merge_xmltv_files(
                 continue
 
             try:
-                tree = ET.parse(file_path)
+                # Parse with comments enabled to preserve teamarr metadata
+                parser = ET.XMLParser(target=ET.TreeBuilder(insert_comments=True))
+                tree = ET.parse(file_path, parser)
                 root = tree.getroot()
 
                 # Collect channels (skip duplicates)

@@ -301,6 +301,9 @@ class EventEPGGenerator:
         # Flags - from template (not hardcoded)
         self._add_flags(programme, template)
 
+        # Teamarr metadata (invisible to EPG readers, used internally)
+        programme.append(ET.Comment("teamarr:event-event"))
+
     def _parse_event_date(self, date_str: str) -> Optional[datetime]:
         """Parse ESPN event date string to datetime."""
         if not date_str:
@@ -396,7 +399,8 @@ class EventEPGGenerator:
         # Categories - respects categories_apply_to setting
         self._add_categories(programme, template, template_ctx, is_filler=True)
 
-        # Flags - only apply to actual events, not filler (pregame is filler)
+        # Teamarr metadata (invisible to EPG readers, used internally)
+        programme.append(ET.Comment("teamarr:event-filler-pregame"))
 
     def _add_postgame_programme(
         self,
@@ -483,7 +487,8 @@ class EventEPGGenerator:
         # Categories - respects categories_apply_to setting
         self._add_categories(programme, template, template_ctx, is_filler=True)
 
-        # Flags - only apply to actual events, not filler (postgame is filler)
+        # Teamarr metadata (invisible to EPG readers, used internally)
+        programme.append(ET.Comment("teamarr:event-filler-postgame"))
 
     def _add_categories(
         self,

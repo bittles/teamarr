@@ -2262,8 +2262,8 @@ def api_epg_stats_live():
     """
     Get live game statistics from the EPG.
 
-    Parses the generated EPG XML and compares event times to current datetime
-    to calculate:
+    Uses teamarr metadata comments in the XML to identify game events,
+    then compares times to current datetime to calculate:
     - games_today: Events scheduled for today
     - live_now: Events currently in progress (started but not ended)
 
@@ -2294,8 +2294,9 @@ def api_epg_stats_live():
         if not os.path.exists(epg_path):
             return jsonify({'success': True, 'stats': stats, 'message': 'No EPG file found'})
 
-        # Parse the EPG XML
-        tree = ET.parse(epg_path)
+        # Parse the EPG XML with comments enabled
+        parser = ET.XMLParser(target=ET.TreeBuilder(insert_comments=True))
+        tree = ET.parse(epg_path, parser)
         root = tree.getroot()
 
         # Parse XMLTV datetime format: YYYYMMDDHHmmss +ZZZZ
@@ -2324,7 +2325,22 @@ def api_epg_stats_live():
 
         # Process each programme element
         for programme in root.findall('.//programme'):
-            channel_id = programme.get('channel', '')
+            # Look for teamarr metadata comment
+            teamarr_type = None
+            for child in programme:
+                if callable(child.tag):  # Comments have callable tag (ET.Comment)
+                    comment_text = child.text or ''
+                    if comment_text.startswith('teamarr:'):
+                        teamarr_type = comment_text[8:]  # Remove 'teamarr:' prefix
+                        break
+
+            # Skip if no teamarr metadata or if it's filler
+            if not teamarr_type or 'filler' in teamarr_type:
+                continue
+
+            # Determine stat key from metadata (teams-event or event-event)
+            stat_key = 'team' if teamarr_type == 'teams-event' else 'event'
+
             start_str = programme.get('start')
             stop_str = programme.get('stop')
             title_elem = programme.find('title')
@@ -2336,16 +2352,6 @@ def api_epg_stats_live():
             if not start_time or not stop_time:
                 continue
 
-            # Determine if team-based or event-based channel
-            is_event = channel_id.startswith('teamarr-event-')
-            stat_key = 'event' if is_event else 'team'
-
-            # Skip filler programmes (pregame, postgame, idle)
-            # Game programmes typically have team names with vs/@
-            is_game = 'vs' in title.lower() or '@' in title or ' at ' in title.lower()
-            if not is_game:
-                continue
-
             start_date = start_time.date()
 
             # Games Today: events scheduled for today
@@ -2354,7 +2360,7 @@ def api_epg_stats_live():
                 stats[stat_key]['today_events'].append({
                     'title': title,
                     'start': start_time.strftime('%I:%M %p'),
-                    'channel': channel_id
+                    'channel': programme.get('channel', '')
                 })
 
                 # Live Now: currently in progress

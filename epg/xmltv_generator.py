@@ -152,6 +152,14 @@ class XMLTVGenerator:
             if flags.get('live', False):
                 ET.SubElement(programme, 'live')
 
+        # Teamarr metadata (invisible to EPG readers, used internally)
+        # Format: teamarr:teams-event, teamarr:teams-filler-pregame, etc.
+        if is_filler:
+            filler_type = event.get('filler_type', 'idle')
+            programme.append(ET.Comment(f"teamarr:teams-filler-{filler_type}"))
+        else:
+            programme.append(ET.Comment("teamarr:teams-event"))
+
     def _add_category(self, programme: ET.Element, category: str):
         """Add category element"""
         cat = ET.SubElement(programme, 'category')

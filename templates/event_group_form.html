@@ -732,12 +732,14 @@ function handleParentGroupChange() {
                 // Set sport and trigger league population
                 sportSelect.value = parentGroup.assigned_sport;
                 sportSelect.disabled = true;
+                sportSelect.removeAttribute('required');  // Backend inherits from parent
                 updateLeagueOptions();
 
                 // Set league after options are populated
                 setTimeout(() => {
                     leagueSelect.value = parentGroup.assigned_league;
                     leagueSelect.disabled = true;
+                    leagueSelect.removeAttribute('required');  // Backend inherits from parent
                 }, 50);
 
                 // Hide required asterisks (values enforced from parent)
@@ -758,7 +760,9 @@ function handleParentGroupChange() {
         // In add mode: re-enable sport/league selection
         if (sportSelect && leagueSelect) {
             sportSelect.disabled = false;
+            sportSelect.setAttribute('required', 'required');
             leagueSelect.disabled = false;
+            leagueSelect.setAttribute('required', 'required');
 
             // Show required asterisks
             if (sportRequired) sportRequired.style.display = 'inline';

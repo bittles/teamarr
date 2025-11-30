@@ -4113,12 +4113,23 @@ def api_event_epg_groups_create():
         dispatcharr_group_id: int (required)
         dispatcharr_account_id: int (required)
         group_name: str (required) - exact name from Dispatcharr
-        assigned_league: str (required) - league code (e.g., 'nfl', 'epl')
-        assigned_sport: str (required) - sport type (e.g., 'football', 'soccer')
+        assigned_league: str (required for independent groups, inherited for child groups)
+        assigned_sport: str (required for independent groups, inherited for child groups)
+        parent_group_id: int (optional) - if set, creates a child group that inherits settings
         event_template_id: int (optional, must be an event template)
     """
     try:
         data = request.get_json()
+
+        # Check for parent group - child groups inherit sport/league
+        parent_group_id = data.get('parent_group_id')
+        if parent_group_id:
+            parent = get_event_epg_group(parent_group_id)
+            if not parent:
+                return jsonify({'error': 'Parent group not found'}), 404
+            # Inherit sport/league from parent
+            data['assigned_sport'] = parent['assigned_sport']
+            data['assigned_league'] = parent['assigned_league']
 
         required = ['dispatcharr_group_id', 'dispatcharr_account_id', 'group_name', 'assigned_league', 'assigned_sport']
         for field in required:

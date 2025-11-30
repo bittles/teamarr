@@ -2541,9 +2541,20 @@ async function deletePreset(presetId) {
 }
 
 async function saveConditionToPreset(index) {
-    const condition = conditions[index];
+    // Read current values from form fields (not the stale conditions array)
+    const nameInputs = document.querySelectorAll('input[name="cond_name[]"]');
+    const typeSelects = document.querySelectorAll('select[name="cond_type[]"]');
+    const valueInputs = document.querySelectorAll('input[name="cond_value[]"]');
+    const priorityInputs = document.querySelectorAll('input[name="cond_priority[]"]');
+    const templateInputs = document.querySelectorAll('input[name="cond_template[]"]');
 
-    if (!condition.condition) {
+    const conditionType = typeSelects[index]?.value || '';
+    const conditionName = nameInputs[index]?.value || 'Custom Condition';
+    const conditionValue = valueInputs[index]?.value || '';
+    const conditionPriority = parseInt(priorityInputs[index]?.value) || 50;
+    const conditionTemplate = templateInputs[index]?.value || '';
+
+    if (!conditionType) {
         alert('Please select a condition type before saving to preset library.');
         return;
     }
@@ -2558,12 +2569,12 @@ async function saveConditionToPreset(index) {
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify({
-                name: condition.name || 'Custom Condition',
+                name: conditionName,
                 description: description || '',
-                condition_type: condition.condition,
-                condition_value: condition.condition_value || '',
-                priority: condition.priority || 50,
-                template: condition.template || ''
+                condition_type: conditionType,
+                condition_value: conditionValue,
+                priority: conditionPriority,
+                template: conditionTemplate
             })
         });
 

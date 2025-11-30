@@ -718,6 +718,57 @@ class EventMatcher:
             suffix = {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th')
         return f"{n}{suffix}"
 
+    def get_event_by_id(
+        self,
+        event_id: str,
+        league: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Fetch an event by its ESPN event ID.
+
+        Used to get event data for existing managed channels when the
+        event wouldn't normally be matched (e.g., game is final but
+        channel hasn't been deleted yet).
+
+        Args:
+            event_id: ESPN event ID
+            league: League code
+
+        Returns:
+            Enriched event dict or None if not found
+        """
+        try:
+            config = get_league_config(league)
+            api_path = config['api_path']
+
+            # Use scoreboard API to get the event
+            scoreboard = self.espn_client.get_scoreboard(api_path)
+            if not scoreboard:
+                return None
+
+            # Find the event by ID
+            events = scoreboard.get('events', [])
+            event = None
+            for e in events:
+                if str(e.get('id')) == str(event_id):
+                    event = e
+                    break
+
+            if not event:
+                # Event not on today's scoreboard - might be from another day
+                # For now just return None, EPG generation will handle gracefully
+                logger.debug(f"Event {event_id} not found on scoreboard for {league}")
+                return None
+
+            # Enrich with team stats
+            event = self.enrich_with_team_stats(event, league)
+
+            return event
+
+        except Exception as e:
+            logger.warning(f"Error fetching event {event_id} for {league}: {e}")
+            return None
+
     def find_and_enrich(
         self,
         team1_id: str,

@@ -1543,8 +1543,10 @@ def get_next_channel_number(group_id: int, auto_assign: bool = True) -> Optional
         auto_assign: If True, auto-assign a channel_start when missing
 
     Returns:
-        The next available channel number, or None if disabled
+        The next available channel number, or None if disabled or would exceed 9999
     """
+    MAX_CHANNEL = 9999
+
     conn = get_connection()
     try:
         cursor = conn.cursor()
@@ -1590,6 +1592,15 @@ def get_next_channel_number(group_id: int, auto_assign: bool = True) -> Optional
         next_num = channel_start
         while next_num in used_set:
             next_num += 1
+            # Enforce Dispatcharr's max channel limit
+            if next_num > MAX_CHANNEL:
+                logger.warning(f"Cannot allocate channel for group {group_id}: would exceed {MAX_CHANNEL}")
+                return None
+
+        # Final check (in case channel_start itself exceeds limit)
+        if next_num > MAX_CHANNEL:
+            logger.warning(f"Cannot allocate channel for group {group_id}: {next_num} exceeds {MAX_CHANNEL}")
+            return None
 
         return next_num
     finally:

@@ -99,9 +99,9 @@
             <div class="form-group">
                 <label for="channel_start">Channel Start Number</label>
                 <input type="number" id="channel_start" name="channel_start" class="form-control"
-                       placeholder="Auto-calculated if empty" min="1"
+                       placeholder="Auto-calculated if empty" min="1" max="9999"
                        value="{{ group.channel_start if group and group.channel_start else '' }}">
-                <small class="form-help">First channel number for created channels. Leave empty to auto-assign next available range.</small>
+                <small class="form-help">First channel number for created channels (max 9999). Leave empty to auto-assign next available range.</small>
             </div>
 
             <div class="form-group">

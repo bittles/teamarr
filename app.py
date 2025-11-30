@@ -374,6 +374,48 @@ def refresh_event_group_core(group, m3u_manager):
                 app.logger.warning(f"Error matching stream '{stream['name']}': {e}")
                 continue
 
+        # Step 3.5: Include existing managed channels that weren't matched
+        # This ensures EPG continues for channels until they're actually deleted
+        # (e.g., game went final but channel hasn't been deleted yet)
+        from database import get_managed_channels_for_group
+
+        existing_channels = get_managed_channels_for_group(group_id)
+        matched_event_ids = {m['event'].get('id') for m in matched_streams}
+
+        for channel in existing_channels:
+            espn_event_id = channel.get('espn_event_id')
+            if not espn_event_id or espn_event_id in matched_event_ids:
+                continue
+
+            # This channel has an event not in matched_streams - fetch it
+            # Pass include_final_events=True to get the event regardless of status
+            try:
+                # We need team IDs to fetch the event - get from channel data
+                # The channel stores home_team and away_team names, not IDs
+                # So we'll fetch the event directly by ID using the scoreboard API
+                event_data = event_matcher.get_event_by_id(
+                    espn_event_id,
+                    group['assigned_league']
+                )
+
+                if event_data:
+                    matched_streams.append({
+                        'stream': {
+                            'id': channel.get('dispatcharr_stream_id'),
+                            'name': channel.get('channel_name', '')
+                        },
+                        'teams': {
+                            'matched': True,
+                            'home_team_name': channel.get('home_team', ''),
+                            'away_team_name': channel.get('away_team', '')
+                        },
+                        'event': event_data,
+                        'from_managed_channel': True  # Flag for debugging
+                    })
+                    app.logger.debug(f"Included final event {espn_event_id} from existing channel '{channel.get('channel_name')}'")
+            except Exception as e:
+                app.logger.warning(f"Could not fetch event {espn_event_id} for existing channel: {e}")
+
         # Calculate totals for stats
         game_stream_count = len(streams)
         total_event_excluded = filtered_outside_lookahead + filtered_final
@@ -3491,6 +3533,11 @@ def api_event_epg_groups_create():
             if not data.get(field):
                 return jsonify({'error': f'Missing required field: {field}'}), 400
 
+        # Validate channel_start doesn't exceed Dispatcharr's max
+        channel_start = data.get('channel_start')
+        if channel_start is not None and channel_start > 9999:
+            return jsonify({'error': 'Channel start cannot exceed 9999 (Dispatcharr limit)'}), 400
+
         # Check if already exists
         existing = get_event_epg_group_by_dispatcharr_id(data['dispatcharr_group_id'])
         if existing:
@@ -3591,6 +3638,10 @@ def api_event_epg_groups_update(group_id):
                     'error': 'Cannot assign team template to event group. Use an event template.',
                     'template_type': template.get('template_type', 'team')
                 }), 400
+
+        # Validate channel_start doesn't exceed Dispatcharr's max
+        if 'channel_start' in data and data['channel_start'] is not None and data['channel_start'] > 9999:
+            return jsonify({'error': 'Channel start cannot exceed 9999 (Dispatcharr limit)'}), 400
 
         # Convert enabled to int if present
         if 'enabled' in data:

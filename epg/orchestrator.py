@@ -11,7 +11,8 @@ This module orchestrates the EPG generation process:
 from datetime import datetime, date, timedelta, timezone
 from typing import List, Dict, Any, Optional
 from zoneinfo import ZoneInfo
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 import json
 
 from utils.logger import get_logger
@@ -30,6 +31,12 @@ class EPGOrchestrator:
         self.espn = ESPNClient()
         self.template_engine = TemplateEngine()
         self.api_calls = 0
+        self._api_calls_lock = threading.Lock()  # Thread-safe counter
+
+    def _increment_api_calls(self, count: int = 1):
+        """Thread-safe increment of API call counter"""
+        with self._api_calls_lock:
+            self.api_calls += count
 
     def _round_to_last_hour(self, dt: datetime) -> datetime:
         """Round datetime down to the last top of hour"""
@@ -185,19 +192,24 @@ class EPGOrchestrator:
                 logger.error(f"Error processing team {team_name}: {e}", exc_info=True)
                 return (team_id, [], str(e))
 
-        # Process all teams in parallel (max 10 workers)
+        # Process all teams in parallel (max 10 workers) with progress updates
         if progress_callback:
-            progress_callback(1, total_teams, "All teams", f"Processing {total_teams} teams in parallel...")
+            progress_callback(0, total_teams, "", f"Processing {total_teams} teams...")
 
         with ThreadPoolExecutor(max_workers=min(len(teams_list), 10)) as executor:
-            results = list(executor.map(process_single_team, teams_list))
+            # Submit all tasks
+            futures = {executor.submit(process_single_team, team): team for team in teams_list}
+
+            # Collect results as they complete, updating progress
+            results = []
+            for i, future in enumerate(as_completed(futures), 1):
+                results.append(future.result())
+                if progress_callback:
+                    progress_callback(i, total_teams, "", f"Processed {i}/{total_teams} teams...")
 
         # Aggregate results (same structure as sequential)
         for team_id, team_events, error in results:
             all_events[team_id] = team_events
-
-        if progress_callback:
-            progress_callback(total_teams, total_teams, "Complete", f"Processed {total_teams} teams")
 
         # Calculate stats
         generation_time = (datetime.now() - start_time).total_seconds()
@@ -487,7 +499,7 @@ class EPGOrchestrator:
                 team['espn_team_id'],
                 14  # Days ahead parameter (doesn't affect past games in response)
             )
-            self.api_calls += 1
+            self._increment_api_calls()
 
             if not schedule_data or 'events' not in schedule_data:
                 continue
@@ -550,7 +562,7 @@ class EPGOrchestrator:
         # Fetch team stats (record, standings, etc.)
         team_data = self.espn.get_team_info(api_sport, api_league, team['espn_team_id'])
         team_stats_basic = self.espn.get_team_stats(api_sport, api_league, team['espn_team_id'])
-        self.api_calls += 1
+        self._increment_api_calls()
 
         # Extract team logo from ESPN data if not already set
         if team_data and 'team' in team_data and not team.get('team_logo_url'):
@@ -560,7 +572,7 @@ class EPGOrchestrator:
 
         # Fetch enhanced team stats (streaks, PPG, standings, home/away records)
         enhanced_stats = self.espn.get_team_stats(api_sport, api_league, team['espn_team_id'])
-        self.api_calls += 1
+        self._increment_api_calls()
 
         # Merge basic and enhanced stats
         team_stats = {**team_stats_basic, **enhanced_stats}
@@ -572,7 +584,7 @@ class EPGOrchestrator:
             team['espn_team_id'],
             days_ahead
         )
-        self.api_calls += 1
+        self._increment_api_calls()
 
         # Fetch extended schedule for context (next/last game info beyond EPG window)
         extended_schedule_data = self.espn.get_team_schedule(
@@ -581,7 +593,7 @@ class EPGOrchestrator:
             team['espn_team_id'],
             30  # Look 30 days ahead for context
         )
-        self.api_calls += 1
+        self._increment_api_calls()
 
         if not schedule_data:
             logger.warning(f"No schedule data for team {team.get('team_name')}")
@@ -594,16 +606,13 @@ class EPGOrchestrator:
         # Unified scoreboard integration: discover missing events AND enrich existing ones
         # This handles soccer leagues (where schedule API returns no future games) and
         # enriches all leagues with live data (odds, broadcasts, scores)
-        api_counter = {'count': self.api_calls}
         events = self._discover_and_enrich_from_scoreboard(
             schedule_events,
             team,
             days_ahead,
-            api_counter,
             epg_timezone,
             epg_start_datetime
         )
-        self.api_calls = api_counter['count']
 
         # Parse extended events (for context only - look back 30 days for last game info)
         epg_tz = ZoneInfo(epg_timezone)
@@ -637,7 +646,7 @@ class EPGOrchestrator:
             if opp_id and opp_id not in opponent_stats_cache:
                 # Fetch enhanced opponent stats
                 opp_enhanced = self.espn.get_team_stats(api_sport, api_league, opp_id)
-                self.api_calls += 1
+                self._increment_api_calls()
                 opponent_stats_cache[opp_id] = opp_enhanced
 
             opponent_stats = opponent_stats_cache.get(opp_id, {})
@@ -657,7 +666,6 @@ class EPGOrchestrator:
 
         # Generate filler entries (pregame/postgame/idle)
         # Pass extended events for next/last game context
-        filler_api_counter = {'count': self.api_calls}
         filler_entries = self._generate_filler_entries(
             team,
             processed_events,
@@ -670,10 +678,8 @@ class EPGOrchestrator:
             settings,
             schedule_data,
             api_sport,
-            api_league,
-            filler_api_counter
+            api_league
         )
-        self.api_calls = filler_api_counter['count']
 
         # Combine game events and filler entries, then sort by start time
         combined_events = processed_events + filler_entries
@@ -686,7 +692,6 @@ class EPGOrchestrator:
         schedule_events: List[dict],
         team: dict,
         days_ahead: int,
-        api_calls_counter: dict,
         epg_timezone: str = 'America/Detroit',
         epg_start_datetime: datetime = None
     ) -> List[dict]:
@@ -703,7 +708,6 @@ class EPGOrchestrator:
             schedule_events: Events from schedule API (may be empty for soccer leagues)
             team: Team configuration dict with espn_team_id
             days_ahead: Number of days in EPG window
-            api_calls_counter: Dict with 'count' key to track API calls
             epg_timezone: User's EPG timezone for date calculations
             epg_start_datetime: EPG start time for filtering events
 
@@ -736,7 +740,7 @@ class EPGOrchestrator:
             date_str = check_date.strftime('%Y%m%d')
 
             scoreboard_data = self.espn.get_scoreboard(api_sport, api_league, date_str)
-            api_calls_counter['count'] += 1
+            self._increment_api_calls()
 
             if not scoreboard_data or 'events' not in scoreboard_data:
                 continue
@@ -856,7 +860,7 @@ class EPGOrchestrator:
         # Fetch scoreboards for last 7 days (to control API calls)
         for date_str in sorted(past_by_date.keys(), reverse=True)[:7]:
             scoreboard_data = self.espn.get_scoreboard(api_sport, api_league, date_str)
-            self.api_calls += 1
+            self._increment_api_calls()
 
             if scoreboard_data and 'events' in scoreboard_data:
                 # Parse scoreboard events
@@ -927,7 +931,7 @@ class EPGOrchestrator:
                     api_league,
                     opponent_id
                 ) or {}
-                self.api_calls += 1
+                self._increment_api_calls()
                 logger.debug(f"Fetched opponent stats for team {opponent_id}")
             except Exception as e:
                 logger.warning(f"Could not fetch opponent stats for {opponent_id}: {e}")
@@ -1046,7 +1050,7 @@ class EPGOrchestrator:
                     )
                     if enriched:
                         next_event = enriched
-                    self.api_calls += 1
+                    self._increment_api_calls()
                 except Exception as e:
                     logger.debug(f"Error enriching next event: {e}")
 
@@ -1166,8 +1170,7 @@ class EPGOrchestrator:
         settings: dict = None,
         schedule_data: dict = None,
         api_sport: str = None,
-        api_league: str = None,
-        api_calls_counter: dict = None
+        api_league: str = None
     ) -> List[dict]:
         """
         Generate pregame, postgame, and idle EPG entries to fill gaps
@@ -1185,16 +1188,11 @@ class EPGOrchestrator:
             schedule_data: Full schedule data for context
             api_sport: Sport type for ESPN API calls (e.g., 'basketball', 'soccer')
             api_league: League code for ESPN API calls (e.g., 'nba', 'eng.1')
-            api_calls_counter: Dict with 'count' key to track API calls made during filler generation
 
         Returns:
             List of filler event dictionaries
         """
         filler_entries = []
-
-        # Initialize API calls counter if not provided
-        if api_calls_counter is None:
-            api_calls_counter = {'count': 0}
 
         # Use EPG timezone for filler generation
         team_tz = ZoneInfo(epg_timezone)
@@ -1308,7 +1306,7 @@ class EPGOrchestrator:
 
                         # Enrich last game with scoreboard data to get final scores
                         last_game = self._enrich_last_game_with_score(
-                            last_game, api_sport, api_league, api_calls_counter, epg_timezone
+                            last_game, api_sport, api_league, epg_timezone
                         )
 
                         pregame_entries = self._create_filler_chunks(
@@ -1403,7 +1401,7 @@ class EPGOrchestrator:
 
                     # Enrich last game with scoreboard data to get final scores
                     last_game = self._enrich_last_game_with_score(
-                        last_game, api_sport, api_league, api_calls_counter, epg_timezone
+                        last_game, api_sport, api_league, epg_timezone
                     )
 
                     # For idle days, create exactly 4 programs aligned to time blocks
@@ -1686,7 +1684,7 @@ class EPGOrchestrator:
         return max(started_games, key=lambda x: x[0])[1]
 
     def _enrich_last_game_with_score(self, last_game: Optional[dict], api_sport: str, api_league: str,
-                                      api_calls_counter: dict, epg_timezone: str = 'America/Detroit') -> Optional[dict]:
+                                      epg_timezone: str = 'America/Detroit') -> Optional[dict]:
         """
         Enrich last game event with scoreboard data to get final scores
 
@@ -1694,7 +1692,6 @@ class EPGOrchestrator:
             last_game: The last game event from schedule (may not have scores)
             api_sport: Sport type (e.g., 'basketball', 'football')
             api_league: League code (e.g., 'nba', 'nfl')
-            api_calls_counter: Counter for API calls
             epg_timezone: Timezone for date formatting
 
         Returns:
@@ -1728,7 +1725,7 @@ class EPGOrchestrator:
                 normalize_broadcasts=True,
                 set_odds_flag=False
             )
-            api_calls_counter['count'] += 1
+            self._increment_api_calls()
 
             if enriched:
                 logger.debug(f"Enriched last game {last_game.get('id')} with scoreboard data")

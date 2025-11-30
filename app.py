@@ -705,6 +705,10 @@ def generate_all_epg(progress_callback=None, settings=None, save_history=True, t
 
         report_progress('starting', 'Initializing EPG generation...', 0)
 
+        # Clear caches and reset counters for fresh generation
+        epg_orchestrator.espn.clear_schedule_cache()
+        epg_orchestrator.api_calls = 0
+
         # ============================================
         # PHASE 1: Team-based EPG
         # ============================================
@@ -795,7 +799,7 @@ def generate_all_epg(progress_callback=None, settings=None, save_history=True, t
                                 app.logger.warning(f"  Account {account_id}: {result.get('message')}")
 
                 # Step 2b: Process all groups in parallel (M3U already refreshed)
-                report_progress('progress', f'Processing {total_groups} event group(s) in parallel...', 55)
+                report_progress('progress', f'Processing {total_groups} event group(s)...', 55)
 
                 def process_single_group(group):
                     """Process a single event group - called in parallel. Exact same logic."""
@@ -807,33 +811,37 @@ def generate_all_epg(progress_callback=None, settings=None, save_history=True, t
                         app.logger.warning(f"Error refreshing event group '{group['group_name']}': {e}")
                         return (group, None, str(e))
 
-                # Process all groups in parallel (max workers = number of groups)
-                from concurrent.futures import ThreadPoolExecutor
+                # Process all groups in parallel with progress updates as each completes
+                from concurrent.futures import ThreadPoolExecutor, as_completed
                 with ThreadPoolExecutor(max_workers=min(len(event_groups_with_templates), 10)) as executor:
-                    group_results = list(executor.map(process_single_group, event_groups_with_templates))
+                    # Submit all tasks
+                    futures = {executor.submit(process_single_group, g): g for g in event_groups_with_templates}
 
-                # Aggregate results (exact same stats aggregation as sequential)
-                for group, refresh_result, error in group_results:
-                    if refresh_result and refresh_result.get('success'):
-                        event_stats['groups_refreshed'] += 1
-                        event_stats['streams_matched'] += refresh_result.get('matched_count', 0)
-                        event_stats['programmes'] += refresh_result.get('programmes_generated', 0)
-                        event_stats['events'] += refresh_result.get('events_count', 0)
-                        event_stats['pregame'] += refresh_result.get('pregame_count', 0)
-                        event_stats['postgame'] += refresh_result.get('postgame_count', 0)
+                    # Collect results as they complete, updating progress (55% to 85% range)
+                    group_results = []
+                    for i, future in enumerate(as_completed(futures), 1):
+                        group, refresh_result, error = future.result()
+                        group_results.append((group, refresh_result, error))
 
-                        # Aggregate filtering stats
-                        event_stats['total_streams'] += refresh_result.get('total_stream_count', 0)
-                        event_stats['filtered_no_indicator'] += refresh_result.get('filtered_no_indicator', 0)
-                        event_stats['filtered_exclude_regex'] += refresh_result.get('filtered_exclude_regex', 0)
-                        event_stats['filtered_outside_lookahead'] += refresh_result.get('filtered_outside_lookahead', 0)
-                        event_stats['filtered_final'] += refresh_result.get('filtered_final', 0)
-                        event_stats['eligible_streams'] += refresh_result.get('stream_count', 0)
+                        # Aggregate stats immediately
+                        if refresh_result and refresh_result.get('success'):
+                            event_stats['groups_refreshed'] += 1
+                            event_stats['streams_matched'] += refresh_result.get('matched_count', 0)
+                            event_stats['programmes'] += refresh_result.get('programmes_generated', 0)
+                            event_stats['events'] += refresh_result.get('events_count', 0)
+                            event_stats['pregame'] += refresh_result.get('pregame_count', 0)
+                            event_stats['postgame'] += refresh_result.get('postgame_count', 0)
+                            event_stats['total_streams'] += refresh_result.get('total_stream_count', 0)
+                            event_stats['filtered_no_indicator'] += refresh_result.get('filtered_no_indicator', 0)
+                            event_stats['filtered_exclude_regex'] += refresh_result.get('filtered_exclude_regex', 0)
+                            event_stats['filtered_outside_lookahead'] += refresh_result.get('filtered_outside_lookahead', 0)
+                            event_stats['filtered_final'] += refresh_result.get('filtered_final', 0)
+                            event_stats['eligible_streams'] += refresh_result.get('stream_count', 0)
+                            update_event_epg_group_last_refresh(group['id'])
 
-                        # Update last refresh timestamp for this group
-                        update_event_epg_group_last_refresh(group['id'])
-
-                report_progress('progress', f'Processed {total_groups} event group(s)...', 85)
+                        # Progress: 55% to 85% range
+                        pct = 55 + int((i / total_groups) * 30)
+                        report_progress('progress', f'Processed {i}/{total_groups} event groups...', pct)
             else:
                 report_progress('progress', 'M3U manager not available, skipping event groups...', 85)
                 app.logger.warning("M3U manager not available - skipping event groups")
@@ -3384,13 +3392,14 @@ def api_event_epg_dispatcharr_streams_sse(group_id):
     import queue
     from concurrent.futures import ThreadPoolExecutor
 
+    # Capture request args NOW, before generator executes (request context gone during streaming)
+    limit = request.args.get('limit', 50, type=int)
+    league = request.args.get('league')
+
     def generate():
         """Generator function for SSE stream"""
+        nonlocal league  # Allow modification from captured outer scope
         progress_queue = queue.Queue()
-
-        # Capture request args before entering thread (request context not available in thread)
-        limit = request.args.get('limit', 50, type=int)
-        league = request.args.get('league')
 
         def send_progress(status, message, **extra):
             """Send a progress update"""
@@ -3511,8 +3520,10 @@ def api_event_epg_dispatcharr_streams_sse(group_id):
                             }
 
                     # Process streams in parallel (max 10 workers)
-                    with ThreadPoolExecutor(max_workers=min(len(streams), 10)) as executor:
-                        match_results = list(executor.map(match_single_stream, streams))
+                    match_results = []
+                    if streams:
+                        with ThreadPoolExecutor(max_workers=min(len(streams), 10)) as executor:
+                            match_results = list(executor.map(match_single_stream, streams))
 
                     # Process results
                     for match_data in match_results:

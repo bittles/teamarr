@@ -1,6 +1,7 @@
 """ESPN API Client for fetching sports schedules and team data"""
 import requests
 import json
+import threading
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
 import time
@@ -26,6 +27,7 @@ class ESPNClient:
         # Cache for team schedules (cleared each EPG generation run)
         # Key: (sport, league, team_slug), Value: schedule data
         self._schedule_cache = {}
+        self._schedule_cache_lock = threading.Lock()  # Thread-safe cache access
 
     def _make_request(self, url: str) -> Optional[Dict]:
         """Make HTTP request with retry logic"""
@@ -113,6 +115,7 @@ class ESPNClient:
 
         Schedule data is cached per-generation to avoid redundant API calls
         when the same team is referenced multiple times (e.g., opponent lookups).
+        Thread-safe via double-checked locking.
 
         Args:
             sport: Sport type (e.g., 'basketball', 'football', 'soccer')
@@ -123,23 +126,32 @@ class ESPNClient:
         Returns:
             Dict with team schedule data or None if failed
         """
-        # Check cache first
         cache_key = (sport, league, str(team_slug))
+
+        # Fast path: check cache without lock
         if cache_key in self._schedule_cache:
             logger.debug(f"Schedule cache hit for {sport}/{league}/{team_slug}")
             return self._schedule_cache[cache_key]
 
-        # Fetch from API
-        url = f"{self.base_url}/{sport}/{league}/teams/{team_slug}/schedule"
-        result = self._make_request(url)
+        # Slow path: acquire lock for cache miss
+        with self._schedule_cache_lock:
+            # Double-check after acquiring lock (another thread may have populated)
+            if cache_key in self._schedule_cache:
+                logger.debug(f"Schedule cache hit (after lock) for {sport}/{league}/{team_slug}")
+                return self._schedule_cache[cache_key]
 
-        # Cache the result (even if None to avoid re-fetching failures)
-        self._schedule_cache[cache_key] = result
-        return result
+            # Fetch from API
+            url = f"{self.base_url}/{sport}/{league}/teams/{team_slug}/schedule"
+            result = self._make_request(url)
+
+            # Cache the result (even if None to avoid re-fetching failures)
+            self._schedule_cache[cache_key] = result
+            return result
 
     def clear_schedule_cache(self):
         """Clear the schedule cache. Call this at the start of each EPG generation."""
-        self._schedule_cache.clear()
+        with self._schedule_cache_lock:
+            self._schedule_cache.clear()
         logger.debug("Schedule cache cleared")
 
     def get_team_info(self, sport: str, league: str, team_id: str) -> Optional[Dict]:

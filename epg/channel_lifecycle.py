@@ -450,6 +450,7 @@ class ChannelLifecycleManager:
         1. Delete channel from Dispatcharr
         2. Delete associated logo from Dispatcharr (if present)
         3. Mark channel as deleted in Teamarr database
+        4. Log deletion in channel history (V2)
 
         Args:
             channel: Managed channel dict (must have 'id', 'dispatcharr_channel_id',
@@ -464,7 +465,7 @@ class ChannelLifecycleManager:
             - db_updated: bool (marked deleted in DB)
             - error: str (if failed)
         """
-        from database import mark_managed_channel_deleted
+        from database import mark_managed_channel_deleted, log_channel_history, update_managed_channel
 
         result = {
             'success': False,
@@ -509,6 +510,17 @@ class ChannelLifecycleManager:
 
                         if mark_managed_channel_deleted(channel_id, logo_deleted=logo_deleted_status):
                             result['db_updated'] = True
+
+                        # V2: Update delete_reason and log history
+                        if reason:
+                            update_managed_channel(channel_id, {'delete_reason': reason})
+
+                        log_channel_history(
+                            managed_channel_id=channel_id,
+                            change_type='deleted',
+                            change_source='epg_generation',
+                            notes=reason or 'Channel deleted'
+                        )
 
                     result['success'] = True
 
@@ -853,6 +865,12 @@ class ChannelLifecycleManager:
         """
         Process matched streams and create/update channels as needed.
 
+        Channel Lifecycle V2 behavior:
+        - Checks duplicate_event_handling mode: 'ignore', 'consolidate', 'separate'
+        - For 'consolidate': adds additional streams to existing channels
+        - For 'separate': creates separate channels per stream
+        - For 'ignore': skips duplicate streams
+
         Args:
             matched_streams: List of dicts with 'stream', 'teams', 'event' keys
             group: Event EPG group configuration
@@ -864,11 +882,16 @@ class ChannelLifecycleManager:
             - skipped: List of skipped streams (with reasons)
             - errors: List of error messages
             - existing: List of already-existing channels
+            - streams_added: List of streams added to existing channels (consolidate mode)
         """
         from database import (
             get_managed_channel_by_event,
             get_next_channel_number,
-            create_managed_channel
+            create_managed_channel,
+            add_stream_to_channel,
+            find_existing_channel,
+            stream_exists_on_channel,
+            log_channel_history
         )
         from epg.event_template_engine import EventTemplateEngine
 
@@ -880,7 +903,8 @@ class ChannelLifecycleManager:
             'skipped': [],
             'errors': [],
             'existing': [],
-            'logo_updated': []
+            'logo_updated': [],
+            'streams_added': []  # V2: tracks consolidate mode additions
         }
 
         # Get lifecycle settings - always use global settings (no per-group overrides)
@@ -892,6 +916,10 @@ class ChannelLifecycleManager:
         create_timing = global_settings['channel_create_timing']
         delete_timing = global_settings['channel_delete_timing']
         sport = group.get('assigned_sport')
+        league = group.get('assigned_league')
+
+        # V2: Get duplicate event handling mode (default: consolidate for backwards compatibility)
+        duplicate_mode = group.get('duplicate_event_handling', 'consolidate')
 
         # Auto-assign channel_start if not set (using get_next_channel_number triggers auto-assign)
         if not channel_start:
@@ -921,14 +949,84 @@ class ChannelLifecycleManager:
                 })
                 continue
 
-            # Check if channel already exists for this event
-            existing = get_managed_channel_by_event(espn_event_id, group['id'])
+            # V2: Check for existing channel based on duplicate handling mode
+            existing = find_existing_channel(
+                group_id=group['id'],
+                event_id=espn_event_id,
+                stream_id=stream.get('id') if duplicate_mode == 'separate' else None,
+                mode=duplicate_mode
+            )
+
             if existing:
-                results['existing'].append({
-                    'stream': stream['name'],
-                    'channel_id': existing['dispatcharr_channel_id'],
-                    'channel_number': existing['channel_number']
-                })
+                # Handle based on duplicate mode
+                if duplicate_mode == 'ignore':
+                    # Skip - don't add stream
+                    results['existing'].append({
+                        'stream': stream['name'],
+                        'channel_id': existing['dispatcharr_channel_id'],
+                        'channel_number': existing['channel_number'],
+                        'action': 'ignored'
+                    })
+
+                elif duplicate_mode == 'consolidate':
+                    # V2: Add stream to existing channel if not already present
+                    if not stream_exists_on_channel(existing['id'], stream['id']):
+                        try:
+                            # Add stream to channel in Dispatcharr
+                            with self._dispatcharr_lock:
+                                current_channel = self.channel_api.get_channel(existing['dispatcharr_channel_id'])
+                                if current_channel:
+                                    current_streams = current_channel.get('streams', [])
+                                    if stream['id'] not in current_streams:
+                                        new_streams = current_streams + [stream['id']]
+                                        update_result = self.channel_api.update_channel(
+                                            existing['dispatcharr_channel_id'],
+                                            {'streams': new_streams}
+                                        )
+                                        if update_result.get('success'):
+                                            # Track in managed_channel_streams
+                                            add_stream_to_channel(
+                                                managed_channel_id=existing['id'],
+                                                dispatcharr_stream_id=stream['id'],
+                                                source_group_id=group['id'],
+                                                stream_name=stream.get('name'),
+                                                source_group_type='parent',
+                                                m3u_account_id=stream.get('m3u_account_id'),
+                                                m3u_account_name=stream.get('m3u_account_name')
+                                            )
+                                            # Log history
+                                            log_channel_history(
+                                                managed_channel_id=existing['id'],
+                                                change_type='stream_added',
+                                                change_source='epg_generation',
+                                                notes=f"Added stream '{stream.get('name')}' (consolidate mode)"
+                                            )
+                                            results['streams_added'].append({
+                                                'stream': stream['name'],
+                                                'channel_id': existing['dispatcharr_channel_id'],
+                                                'channel_name': existing['channel_name']
+                                            })
+                                            logger.debug(
+                                                f"Added stream '{stream['name']}' to channel "
+                                                f"'{existing['channel_name']}' (consolidate mode)"
+                                            )
+                        except Exception as e:
+                            logger.warning(f"Failed to add stream to channel: {e}")
+
+                    results['existing'].append({
+                        'stream': stream['name'],
+                        'channel_id': existing['dispatcharr_channel_id'],
+                        'channel_number': existing['channel_number'],
+                        'action': 'consolidated'
+                    })
+
+                else:  # duplicate_mode == 'separate' - channel found for this stream
+                    results['existing'].append({
+                        'stream': stream['name'],
+                        'channel_id': existing['dispatcharr_channel_id'],
+                        'channel_number': existing['channel_number'],
+                        'action': 'separate_exists'
+                    })
 
                 # Sync channel settings (name, group, profile, stream) if they've changed
                 self._sync_channel_settings(
@@ -1042,13 +1140,34 @@ class ChannelLifecycleManager:
             # Note: EPG association happens AFTER EPG refresh in Dispatcharr
             # See associate_epg_with_channels() method
 
-            # Track in database
+            # Track in database with V2 extended fields
             try:
-                home_team = event.get('home_team', {}).get('name', '')
-                away_team = event.get('away_team', {}).get('name', '')
+                home_team_obj = event.get('home_team', {})
+                away_team_obj = event.get('away_team', {})
+
+                home_team = home_team_obj.get('name', '')
+                away_team = away_team_obj.get('name', '')
+                home_team_abbrev = home_team_obj.get('abbreviation', '')
+                away_team_abbrev = away_team_obj.get('abbreviation', '')
+                home_team_logo = home_team_obj.get('logo', '')
+                away_team_logo = away_team_obj.get('logo', '')
 
                 # Store full UTC datetime (convert to user TZ in display)
                 event_date = event.get('date', '') or None
+
+                # Build event name
+                event_name = f"{away_team_abbrev or away_team} @ {home_team_abbrev or home_team}"
+
+                # Get venue and broadcast info if available
+                venue = event.get('venue', {}).get('fullName', '') if event.get('venue') else ''
+                broadcast = event.get('broadcast', '')
+
+                # Get logo URL from template if present
+                logo_url_source = None
+                if template and template.get('channel_logo_url'):
+                    from epg.event_template_engine import build_event_context
+                    logo_ctx = build_event_context(event, stream, group, self.timezone)
+                    logo_url_source = template_engine.resolve(template['channel_logo_url'], logo_ctx)
 
                 managed_id = create_managed_channel(
                     event_epg_group_id=group['id'],
@@ -1056,14 +1175,49 @@ class ChannelLifecycleManager:
                     dispatcharr_stream_id=stream['id'],
                     channel_number=channel_number,
                     channel_name=channel_name,
-                    tvg_id=tvg_id,  # For EPG association after refresh
+                    tvg_id=tvg_id,
                     espn_event_id=espn_event_id,
                     event_date=event_date,
                     home_team=home_team,
                     away_team=away_team,
                     scheduled_delete_at=delete_at.isoformat() if delete_at else None,
-                    dispatcharr_logo_id=logo_id,  # Track logo for cleanup on deletion
-                    channel_profile_id=channel_profile_id  # Track profile for cleanup on change
+                    dispatcharr_logo_id=logo_id,
+                    channel_profile_id=channel_profile_id,
+                    # V2 fields
+                    primary_stream_id=stream['id'] if duplicate_mode == 'separate' else None,
+                    channel_group_id=channel_group_id,
+                    stream_profile_id=stream_profile_id,
+                    logo_url=logo_url_source,
+                    home_team_abbrev=home_team_abbrev,
+                    home_team_logo=home_team_logo,
+                    away_team_abbrev=away_team_abbrev,
+                    away_team_logo=away_team_logo,
+                    event_name=event_name,
+                    league=league,
+                    sport=sport,
+                    venue=venue,
+                    broadcast=broadcast,
+                    sync_status='created'
+                )
+
+                # V2: Also track stream in managed_channel_streams
+                add_stream_to_channel(
+                    managed_channel_id=managed_id,
+                    dispatcharr_stream_id=stream['id'],
+                    source_group_id=group['id'],
+                    stream_name=stream.get('name'),
+                    source_group_type='parent',
+                    priority=0,  # Primary stream
+                    m3u_account_id=stream.get('m3u_account_id'),
+                    m3u_account_name=stream.get('m3u_account_name')
+                )
+
+                # V2: Log channel creation in history
+                log_channel_history(
+                    managed_channel_id=managed_id,
+                    change_type='created',
+                    change_source='epg_generation',
+                    notes=f"Channel created for event {event_name}"
                 )
 
                 results['created'].append({

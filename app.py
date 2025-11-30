@@ -876,22 +876,54 @@ def generate_all_epg(progress_callback=None, settings=None, save_history=True, t
         # ============================================
         report_progress('progress', 'Processing channel lifecycle...', 88)
 
+        reconciliation_stats = {
+            'issues_found': 0,
+            'issues_fixed': 0,
+            'orphans_teamarr': 0,
+            'orphans_dispatcharr': 0,
+            'duplicates': 0,
+            'drift': 0
+        }
+
         try:
             lifecycle_mgr = get_lifecycle_manager()
             if lifecycle_mgr:
-                # 3a: Clean up channels from disabled groups
+                # 3a: Run reconciliation if enabled
+                if settings.get('reconcile_on_epg_generation', True):
+                    from epg.reconciliation import run_reconciliation
+                    try:
+                        recon_result = run_reconciliation(auto_fix=True)
+                        if recon_result:
+                            summary = recon_result.summary
+                            reconciliation_stats['issues_found'] = summary.get('total', 0)
+                            reconciliation_stats['issues_fixed'] = summary.get('fixed', 0)
+                            reconciliation_stats['orphans_teamarr'] = summary.get('orphan_teamarr', 0)
+                            reconciliation_stats['orphans_dispatcharr'] = summary.get('orphan_dispatcharr', 0)
+                            reconciliation_stats['duplicates'] = summary.get('duplicate', 0)
+                            reconciliation_stats['drift'] = summary.get('drift', 0)
+
+                            if reconciliation_stats['issues_found'] > 0:
+                                app.logger.info(
+                                    f"🔍 Reconciliation: {reconciliation_stats['issues_found']} issues found, "
+                                    f"{reconciliation_stats['issues_fixed']} fixed"
+                                )
+                    except Exception as e:
+                        app.logger.warning(f"Reconciliation error (non-fatal): {e}")
+
+                # 3b: Clean up channels from disabled groups
                 disabled_cleanup = lifecycle_mgr.cleanup_disabled_groups()
                 disabled_deleted = len(disabled_cleanup.get('deleted', []))
                 if disabled_deleted:
                     app.logger.info(f"🗑️ Cleaned up {disabled_deleted} channel(s) from disabled groups")
 
-                # 3b: Process scheduled deletions
+                # 3c: Process scheduled deletions
                 deletion_results = lifecycle_mgr.process_scheduled_deletions()
                 scheduled_deleted = len(deletion_results.get('deleted', []))
                 if scheduled_deleted:
                     app.logger.info(f"🗑️ Processed {scheduled_deleted} scheduled channel deletions")
 
                 lifecycle_stats['channels_deleted'] = disabled_deleted + scheduled_deleted
+                lifecycle_stats['reconciliation'] = reconciliation_stats
         except Exception as e:
             app.logger.warning(f"Channel lifecycle processing error: {e}")
 

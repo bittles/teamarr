@@ -443,6 +443,193 @@ def run_migrations(conn):
     except Exception as e:
         print(f"  ⚠️ Could not clear per-group timing settings: {e}")
 
+    # =========================================================================
+    # 7. CHANNEL LIFECYCLE V2 - Enhanced tracking & reconciliation
+    # =========================================================================
+
+    # 7a. Create managed_channel_streams table (multi-stream support)
+    if not table_exists("managed_channel_streams"):
+        try:
+            cursor.execute("""
+                CREATE TABLE managed_channel_streams (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    managed_channel_id INTEGER NOT NULL,
+                    dispatcharr_stream_id INTEGER NOT NULL,
+
+                    -- Stream info
+                    stream_name TEXT,
+                    m3u_account_id INTEGER,
+                    m3u_account_name TEXT,
+
+                    -- Source tracking
+                    source_group_id INTEGER NOT NULL,
+                    source_group_type TEXT NOT NULL DEFAULT 'parent',
+
+                    -- Ordering
+                    priority INTEGER DEFAULT 0,
+
+                    -- Lifecycle
+                    added_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    removed_at TEXT,
+                    remove_reason TEXT,
+
+                    -- Sync state
+                    last_verified_at TEXT,
+                    in_dispatcharr INTEGER DEFAULT 1,
+
+                    FOREIGN KEY (managed_channel_id) REFERENCES managed_channels(id) ON DELETE CASCADE,
+                    FOREIGN KEY (source_group_id) REFERENCES event_epg_groups(id)
+                )
+            """)
+            migrations_run += 1
+            print("  ✅ Created table: managed_channel_streams")
+
+            # Create indexes
+            cursor.execute("""
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_mcs_unique
+                ON managed_channel_streams(managed_channel_id, dispatcharr_stream_id)
+                WHERE removed_at IS NULL
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_mcs_stream ON managed_channel_streams(dispatcharr_stream_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_mcs_source_group ON managed_channel_streams(source_group_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_mcs_channel ON managed_channel_streams(managed_channel_id)")
+        except Exception as e:
+            print(f"  ⚠️ Could not create managed_channel_streams table: {e}")
+        conn.commit()
+
+    # 7b. Create managed_channel_history table (audit trail)
+    if not table_exists("managed_channel_history"):
+        try:
+            cursor.execute("""
+                CREATE TABLE managed_channel_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    managed_channel_id INTEGER NOT NULL,
+
+                    changed_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    change_type TEXT NOT NULL,
+                    change_source TEXT,
+
+                    field_name TEXT,
+                    old_value TEXT,
+                    new_value TEXT,
+
+                    notes TEXT,
+
+                    FOREIGN KEY (managed_channel_id) REFERENCES managed_channels(id)
+                )
+            """)
+            migrations_run += 1
+            print("  ✅ Created table: managed_channel_history")
+
+            # Create indexes
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_mch_channel ON managed_channel_history(managed_channel_id, changed_at DESC)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_mch_time ON managed_channel_history(changed_at DESC)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_mch_type ON managed_channel_history(change_type)")
+        except Exception as e:
+            print(f"  ⚠️ Could not create managed_channel_history table: {e}")
+        conn.commit()
+
+    # 7c. Add new columns to managed_channels
+    managed_channels_v2_columns = [
+        # Identity
+        ("primary_stream_id", "INTEGER"),
+        ("logo_url", "TEXT"),
+
+        # Event context
+        ("home_team_abbrev", "TEXT"),
+        ("home_team_logo", "TEXT"),
+        ("away_team_abbrev", "TEXT"),
+        ("away_team_logo", "TEXT"),
+        ("event_name", "TEXT"),
+        ("league", "TEXT"),
+        ("sport", "TEXT"),
+        ("venue", "TEXT"),
+        ("broadcast", "TEXT"),
+
+        # Lifecycle
+        ("delete_reason", "TEXT"),
+
+        # Sync state
+        ("last_verified_at", "TEXT"),
+        ("sync_status", "TEXT DEFAULT 'created'"),
+        ("sync_notes", "TEXT"),
+
+        # Channel settings tracking
+        ("channel_group_id", "INTEGER"),
+        ("stream_profile_id", "INTEGER"),
+    ]
+    add_columns_if_missing("managed_channels", managed_channels_v2_columns)
+
+    # 7d. Add new columns to event_epg_groups (parent/child, duplicate handling)
+    event_epg_groups_v2_columns = [
+        ("parent_group_id", "INTEGER"),
+        ("duplicate_event_handling", "TEXT DEFAULT 'consolidate'"),
+    ]
+    add_columns_if_missing("event_epg_groups", event_epg_groups_v2_columns)
+
+    # 7e. Add reconciliation settings
+    reconciliation_settings = [
+        ("reconcile_on_epg_generation", "INTEGER DEFAULT 1"),
+        ("reconcile_on_startup", "INTEGER DEFAULT 1"),
+        ("auto_fix_orphan_teamarr", "INTEGER DEFAULT 1"),
+        ("auto_fix_orphan_dispatcharr", "INTEGER DEFAULT 0"),
+        ("auto_fix_duplicates", "INTEGER DEFAULT 0"),
+        ("channel_history_retention_days", "INTEGER DEFAULT 90"),
+        ("default_duplicate_event_handling", "TEXT DEFAULT 'consolidate'"),
+    ]
+    add_columns_if_missing("settings", reconciliation_settings)
+
+    # 7f. Populate tvg_id from espn_event_id where missing
+    try:
+        cursor.execute("""
+            UPDATE managed_channels
+            SET tvg_id = 'teamarr-event-' || espn_event_id
+            WHERE tvg_id IS NULL AND espn_event_id IS NOT NULL
+        """)
+        if cursor.rowcount > 0:
+            print(f"  ✅ Populated tvg_id for {cursor.rowcount} managed channels")
+        conn.commit()
+    except Exception as e:
+        print(f"  ⚠️ Could not populate tvg_id: {e}")
+
+    # 7g. Migrate existing stream references to managed_channel_streams
+    try:
+        cursor.execute("""
+            INSERT OR IGNORE INTO managed_channel_streams
+            (managed_channel_id, dispatcharr_stream_id, source_group_id, source_group_type, priority)
+            SELECT id, dispatcharr_stream_id, event_epg_group_id, 'parent', 0
+            FROM managed_channels
+            WHERE dispatcharr_stream_id IS NOT NULL
+              AND deleted_at IS NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM managed_channel_streams mcs
+                  WHERE mcs.managed_channel_id = managed_channels.id
+                    AND mcs.dispatcharr_stream_id = managed_channels.dispatcharr_stream_id
+              )
+        """)
+        if cursor.rowcount > 0:
+            migrations_run += 1
+            print(f"  ✅ Migrated {cursor.rowcount} existing streams to managed_channel_streams")
+        conn.commit()
+    except Exception as e:
+        print(f"  ⚠️ Could not migrate streams: {e}")
+
+    # 7h. Create additional indexes for managed_channels
+    try:
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_mc_dispatcharr_id ON managed_channels(dispatcharr_channel_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_mc_tvg_id ON managed_channels(tvg_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_mc_sync_status ON managed_channels(sync_status) WHERE deleted_at IS NULL")
+    except Exception as e:
+        print(f"  ⚠️ Could not create managed_channels indexes: {e}")
+    conn.commit()
+
+    # 7i. Create index for parent/child groups
+    try:
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_eeg_parent ON event_epg_groups(parent_group_id) WHERE parent_group_id IS NOT NULL")
+    except Exception as e:
+        print(f"  ⚠️ Could not create parent group index: {e}")
+    conn.commit()
+
     if migrations_run > 0:
         print(f"✅ Completed {migrations_run} migration(s)")
 
@@ -1369,14 +1556,54 @@ def create_managed_channel(
     away_team: str = None,
     scheduled_delete_at: str = None,
     dispatcharr_logo_id: int = None,
-    channel_profile_id: int = None
+    channel_profile_id: int = None,
+    # V2 fields
+    primary_stream_id: int = None,
+    channel_group_id: int = None,
+    stream_profile_id: int = None,
+    logo_url: str = None,
+    home_team_abbrev: str = None,
+    home_team_logo: str = None,
+    away_team_abbrev: str = None,
+    away_team_logo: str = None,
+    event_name: str = None,
+    league: str = None,
+    sport: str = None,
+    venue: str = None,
+    broadcast: str = None,
+    sync_status: str = 'created'
 ) -> int:
     """
     Create a new managed channel record.
 
     Args:
-        dispatcharr_logo_id: Logo ID in Dispatcharr (for cleanup when channel is deleted)
-        channel_profile_id: Channel profile ID the channel was added to (for cleanup on profile change)
+        event_epg_group_id: Event EPG group that owns this channel
+        dispatcharr_channel_id: Channel ID in Dispatcharr
+        dispatcharr_stream_id: Primary stream ID (legacy, also added to managed_channel_streams)
+        channel_number: Channel number
+        channel_name: Channel display name
+        tvg_id: EPG channel ID (format: teamarr-event-{espn_event_id})
+        espn_event_id: ESPN event ID
+        event_date: Event date/time in ISO format
+        home_team: Home team name
+        away_team: Away team name
+        scheduled_delete_at: When to delete the channel
+        dispatcharr_logo_id: Logo ID in Dispatcharr (for cleanup)
+        channel_profile_id: Channel profile ID (for cleanup)
+        primary_stream_id: Stream that created this channel (for 'separate' mode)
+        channel_group_id: Dispatcharr channel group ID
+        stream_profile_id: Dispatcharr stream profile ID
+        logo_url: Source URL used for logo
+        home_team_abbrev: Home team abbreviation
+        home_team_logo: Home team logo URL
+        away_team_abbrev: Away team abbreviation
+        away_team_logo: Away team logo URL
+        event_name: Event name (e.g., "49ers vs Browns")
+        league: League code
+        sport: Sport type
+        venue: Venue name
+        broadcast: Broadcast info
+        sync_status: Initial sync status (default: 'created')
 
     Returns:
         ID of created record
@@ -1393,14 +1620,18 @@ def create_managed_channel(
             (event_epg_group_id, dispatcharr_channel_id, dispatcharr_stream_id,
              channel_number, channel_name, tvg_id, espn_event_id, event_date,
              home_team, away_team, scheduled_delete_at, dispatcharr_logo_id,
-             channel_profile_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             channel_profile_id, primary_stream_id, channel_group_id, stream_profile_id,
+             logo_url, home_team_abbrev, home_team_logo, away_team_abbrev, away_team_logo,
+             event_name, league, sport, venue, broadcast, sync_status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 event_epg_group_id, dispatcharr_channel_id, dispatcharr_stream_id,
                 channel_number, channel_name, tvg_id, espn_event_id, event_date,
                 home_team, away_team, scheduled_delete_at, dispatcharr_logo_id,
-                channel_profile_id
+                channel_profile_id, primary_stream_id, channel_group_id, stream_profile_id,
+                logo_url, home_team_abbrev, home_team_logo, away_team_abbrev, away_team_logo,
+                event_name, league, sport, venue, broadcast, sync_status
             )
         )
         conn.commit()
@@ -1902,3 +2133,394 @@ def get_epg_stats_summary() -> Dict[str, Any]:
         },
         'generation_time': latest.get('generation_time_seconds', 0) or 0,
     }
+
+
+# =============================================================================
+# Channel Lifecycle V2 - Stream Management Functions
+# =============================================================================
+
+def get_channel_streams(managed_channel_id: int, include_removed: bool = False) -> List[Dict[str, Any]]:
+    """Get all streams attached to a managed channel, ordered by priority."""
+    query = """
+        SELECT mcs.*, eg.group_name as source_group_name
+        FROM managed_channel_streams mcs
+        LEFT JOIN event_epg_groups eg ON mcs.source_group_id = eg.id
+        WHERE mcs.managed_channel_id = ?
+    """
+    if not include_removed:
+        query += " AND mcs.removed_at IS NULL"
+    query += " ORDER BY mcs.priority"
+    return db_fetch_all(query, (managed_channel_id,))
+
+
+def add_stream_to_channel(
+    managed_channel_id: int,
+    dispatcharr_stream_id: int,
+    source_group_id: int,
+    stream_name: str = None,
+    source_group_type: str = 'parent',
+    priority: int = None,
+    m3u_account_id: int = None,
+    m3u_account_name: str = None
+) -> int:
+    """
+    Add a stream to a managed channel.
+
+    Args:
+        managed_channel_id: ID of the managed channel
+        dispatcharr_stream_id: Dispatcharr stream ID
+        source_group_id: Event EPG group that contributed this stream
+        stream_name: Stream name for display
+        source_group_type: 'parent' or 'child'
+        priority: Stream priority (0=primary, higher=failover). Auto-assigned if None.
+        m3u_account_id: M3U account ID
+        m3u_account_name: M3U account name
+
+    Returns:
+        ID of the created stream record
+    """
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+
+        # Auto-assign priority if not specified
+        if priority is None:
+            result = cursor.execute("""
+                SELECT MAX(priority) as max_p FROM managed_channel_streams
+                WHERE managed_channel_id = ? AND removed_at IS NULL
+            """, (managed_channel_id,)).fetchone()
+            priority = (result['max_p'] or -1) + 1 if result and result['max_p'] is not None else 0
+
+        cursor.execute("""
+            INSERT INTO managed_channel_streams
+            (managed_channel_id, dispatcharr_stream_id, stream_name,
+             source_group_id, source_group_type, priority,
+             m3u_account_id, m3u_account_name)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (managed_channel_id, dispatcharr_stream_id, stream_name,
+              source_group_id, source_group_type, priority,
+              m3u_account_id, m3u_account_name))
+
+        conn.commit()
+        return cursor.lastrowid
+    finally:
+        conn.close()
+
+
+def remove_stream_from_channel(
+    managed_channel_id: int,
+    dispatcharr_stream_id: int,
+    reason: str = None
+) -> bool:
+    """
+    Remove a stream from a managed channel (soft delete).
+
+    Args:
+        managed_channel_id: ID of the managed channel
+        dispatcharr_stream_id: Stream ID to remove
+        reason: Reason for removal
+
+    Returns:
+        True if stream was removed
+    """
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+
+        # Soft delete the stream
+        cursor.execute("""
+            UPDATE managed_channel_streams
+            SET removed_at = CURRENT_TIMESTAMP, remove_reason = ?
+            WHERE managed_channel_id = ? AND dispatcharr_stream_id = ? AND removed_at IS NULL
+        """, (reason, managed_channel_id, dispatcharr_stream_id))
+
+        if cursor.rowcount == 0:
+            return False
+
+        # Re-sequence remaining streams
+        remaining = cursor.execute("""
+            SELECT id, priority FROM managed_channel_streams
+            WHERE managed_channel_id = ? AND removed_at IS NULL
+            ORDER BY priority
+        """, (managed_channel_id,)).fetchall()
+
+        for i, stream in enumerate(remaining):
+            if stream['priority'] != i:
+                cursor.execute("""
+                    UPDATE managed_channel_streams SET priority = ? WHERE id = ?
+                """, (i, stream['id']))
+
+        conn.commit()
+        return True
+    finally:
+        conn.close()
+
+
+def stream_exists_on_channel(managed_channel_id: int, dispatcharr_stream_id: int) -> bool:
+    """Check if a stream is already attached to a channel."""
+    result = db_fetch_one("""
+        SELECT 1 FROM managed_channel_streams
+        WHERE managed_channel_id = ? AND dispatcharr_stream_id = ? AND removed_at IS NULL
+    """, (managed_channel_id, dispatcharr_stream_id))
+    return result is not None
+
+
+# =============================================================================
+# Channel Lifecycle V2 - History/Audit Functions
+# =============================================================================
+
+def log_channel_history(
+    managed_channel_id: int,
+    change_type: str,
+    change_source: str = None,
+    field_name: str = None,
+    old_value: str = None,
+    new_value: str = None,
+    notes: str = None
+) -> int:
+    """
+    Log a change to channel history.
+
+    Args:
+        managed_channel_id: ID of the managed channel
+        change_type: Type of change (created, modified, stream_added, stream_removed,
+                     stream_reordered, verified, drifted, deleted, restored)
+        change_source: Source of change (epg_generation, reconciliation, manual, external_sync)
+        field_name: Name of field that changed (for modified type)
+        old_value: Previous value
+        new_value: New value
+        notes: Additional notes
+
+    Returns:
+        ID of the history record
+    """
+    return db_insert("""
+        INSERT INTO managed_channel_history
+        (managed_channel_id, change_type, change_source, field_name, old_value, new_value, notes)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (managed_channel_id, change_type, change_source, field_name, old_value, new_value, notes))
+
+
+def get_channel_history(managed_channel_id: int, limit: int = 100) -> List[Dict[str, Any]]:
+    """Get history for a specific channel."""
+    return db_fetch_all("""
+        SELECT * FROM managed_channel_history
+        WHERE managed_channel_id = ?
+        ORDER BY changed_at DESC
+        LIMIT ?
+    """, (managed_channel_id, limit))
+
+
+def get_recent_channel_changes(hours: int = 24, change_types: List[str] = None) -> List[Dict[str, Any]]:
+    """Get recent changes across all channels."""
+    query = """
+        SELECT mch.*, mc.channel_name, mc.channel_number
+        FROM managed_channel_history mch
+        JOIN managed_channels mc ON mch.managed_channel_id = mc.id
+        WHERE mch.changed_at >= datetime('now', ?)
+    """
+    params = [f'-{hours} hours']
+
+    if change_types:
+        placeholders = ','.join('?' * len(change_types))
+        query += f" AND mch.change_type IN ({placeholders})"
+        params.extend(change_types)
+
+    query += " ORDER BY mch.changed_at DESC"
+
+    return db_fetch_all(query, tuple(params))
+
+
+def cleanup_old_channel_history(days: int = 90) -> int:
+    """Delete channel history older than N days. Returns count deleted."""
+    return db_execute("""
+        DELETE FROM managed_channel_history
+        WHERE changed_at < datetime('now', ? || ' days')
+    """, (f"-{days}",))
+
+
+# =============================================================================
+# Channel Lifecycle V2 - Channel Lookup Functions (Duplicate Handling)
+# =============================================================================
+
+def find_existing_channel(
+    group_id: int,
+    event_id: str,
+    stream_id: int = None,
+    mode: str = 'consolidate'
+) -> Optional[Dict[str, Any]]:
+    """
+    Find existing channel based on duplicate handling mode.
+
+    Args:
+        group_id: Event EPG group ID
+        event_id: ESPN event ID
+        stream_id: Stream ID (only used for 'separate' mode)
+        mode: Duplicate handling mode ('ignore', 'consolidate', 'separate')
+
+    Returns:
+        Managed channel dict if found, None otherwise
+    """
+    if mode == 'separate':
+        # Must match specific stream
+        return db_fetch_one("""
+            SELECT * FROM managed_channels
+            WHERE event_epg_group_id = ?
+              AND espn_event_id = ?
+              AND primary_stream_id = ?
+              AND deleted_at IS NULL
+        """, (group_id, event_id, stream_id))
+    else:
+        # Any channel for this event in this group
+        return db_fetch_one("""
+            SELECT * FROM managed_channels
+            WHERE event_epg_group_id = ?
+              AND espn_event_id = ?
+              AND deleted_at IS NULL
+        """, (group_id, event_id))
+
+
+def find_parent_channel_for_event(parent_group_id: int, event_id: str) -> Optional[Dict[str, Any]]:
+    """Find a parent group's channel for a given event (used by child groups)."""
+    return db_fetch_one("""
+        SELECT * FROM managed_channels
+        WHERE event_epg_group_id = ?
+          AND espn_event_id = ?
+          AND deleted_at IS NULL
+    """, (parent_group_id, event_id))
+
+
+def get_channels_by_sync_status(status: str) -> List[Dict[str, Any]]:
+    """Get all channels with a specific sync status."""
+    return db_fetch_all("""
+        SELECT mc.*, eg.group_name
+        FROM managed_channels mc
+        LEFT JOIN event_epg_groups eg ON mc.event_epg_group_id = eg.id
+        WHERE mc.sync_status = ? AND mc.deleted_at IS NULL
+        ORDER BY mc.channel_number
+    """, (status,))
+
+
+def update_channel_sync_status(
+    channel_id: int,
+    status: str,
+    notes: str = None
+) -> bool:
+    """Update a channel's sync status."""
+    return db_execute("""
+        UPDATE managed_channels
+        SET sync_status = ?, sync_notes = ?, last_verified_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+    """, (status, notes, channel_id)) > 0
+
+
+# =============================================================================
+# Channel Lifecycle V2 - Parent/Child Group Functions
+# =============================================================================
+
+def get_parent_groups(enabled_only: bool = True) -> List[Dict[str, Any]]:
+    """Get all parent groups (groups with parent_group_id IS NULL)."""
+    query = """
+        SELECT g.*, t.name as event_template_name
+        FROM event_epg_groups g
+        LEFT JOIN templates t ON g.event_template_id = t.id
+        WHERE g.parent_group_id IS NULL
+    """
+    if enabled_only:
+        query += " AND g.enabled = 1"
+    query += " ORDER BY g.group_name"
+    return db_fetch_all(query)
+
+
+def get_child_groups(parent_id: int = None, enabled_only: bool = True) -> List[Dict[str, Any]]:
+    """
+    Get child groups, optionally filtered by parent.
+
+    Args:
+        parent_id: If specified, only return children of this parent
+        enabled_only: Only return enabled groups
+
+    Returns:
+        List of child groups
+    """
+    if parent_id:
+        query = """
+            SELECT g.*, t.name as event_template_name,
+                   pg.group_name as parent_group_name
+            FROM event_epg_groups g
+            LEFT JOIN templates t ON g.event_template_id = t.id
+            LEFT JOIN event_epg_groups pg ON g.parent_group_id = pg.id
+            WHERE g.parent_group_id = ?
+        """
+        params = [parent_id]
+    else:
+        query = """
+            SELECT g.*, t.name as event_template_name,
+                   pg.group_name as parent_group_name
+            FROM event_epg_groups g
+            LEFT JOIN templates t ON g.event_template_id = t.id
+            LEFT JOIN event_epg_groups pg ON g.parent_group_id = pg.id
+            WHERE g.parent_group_id IS NOT NULL
+        """
+        params = []
+
+    if enabled_only:
+        query += " AND g.enabled = 1"
+    query += " ORDER BY g.group_name"
+
+    return db_fetch_all(query, tuple(params))
+
+
+def validate_parent_child_relationship(child_group: Dict, parent_group: Dict) -> tuple:
+    """
+    Validate parent/child relationship constraints.
+
+    Args:
+        child_group: The group to become a child
+        parent_group: The proposed parent group
+
+    Returns:
+        Tuple of (is_valid: bool, error_message: str)
+    """
+    # Parent cannot be a child itself
+    if parent_group.get('parent_group_id'):
+        return False, "Cannot assign a child group as parent (no nesting)"
+
+    # Same sport required
+    if child_group.get('assigned_sport') != parent_group.get('assigned_sport'):
+        return False, f"Child must have same sport as parent ({parent_group.get('assigned_sport')})"
+
+    # Child cannot have existing channels
+    existing_channels = get_managed_channels_for_group(child_group['id'])
+    if existing_channels:
+        return False, f"Group has {len(existing_channels)} existing channels. Cannot convert to child."
+
+    return True, "Valid"
+
+
+def get_potential_parents_for_sport(sport: str, exclude_group_id: int = None) -> List[Dict[str, Any]]:
+    """
+    Get groups that could serve as parents for a new child group with given sport.
+
+    Args:
+        sport: Sport type (e.g., 'football', 'basketball')
+        exclude_group_id: Group ID to exclude (the group being edited)
+
+    Returns:
+        List of potential parent groups
+    """
+    query = """
+        SELECT id, group_name, assigned_league, assigned_sport
+        FROM event_epg_groups
+        WHERE parent_group_id IS NULL
+          AND assigned_sport = ?
+          AND enabled = 1
+    """
+    params = [sport.lower()]
+
+    if exclude_group_id:
+        query += " AND id != ?"
+        params.append(exclude_group_id)
+
+    query += " ORDER BY group_name"
+    return db_fetch_all(query, tuple(params))

@@ -246,6 +246,17 @@ CREATE TABLE IF NOT EXISTS settings (
     time_format TEXT DEFAULT '12h',                  -- '12h' or '24h'
     show_timezone BOOLEAN DEFAULT 1,                 -- Show timezone abbreviation (EST, PST, etc.)
 
+    -- Reconciliation Settings
+    reconcile_on_epg_generation INTEGER DEFAULT 1,   -- Run reconciliation before EPG generation
+    reconcile_on_startup INTEGER DEFAULT 1,          -- Run reconciliation on app startup
+    auto_fix_orphan_teamarr INTEGER DEFAULT 1,       -- Auto-mark orphaned records as deleted
+    auto_fix_orphan_dispatcharr INTEGER DEFAULT 0,   -- Auto-delete untracked channels (dangerous)
+    auto_fix_duplicates INTEGER DEFAULT 0,           -- Auto-merge duplicate channels
+    channel_history_retention_days INTEGER DEFAULT 90, -- Days to keep channel history
+
+    -- Default Settings for New Groups
+    default_duplicate_event_handling TEXT DEFAULT 'consolidate',  -- ignore, consolidate, separate
+
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -636,6 +647,10 @@ CREATE TABLE IF NOT EXISTS event_epg_groups (
     channel_group_id INTEGER,                      -- Dispatcharr channel group to create channels in
     channel_group_name TEXT,                       -- Dispatcharr channel group name (for UI display)
 
+    -- Parent/Child Group Relationship
+    parent_group_id INTEGER REFERENCES event_epg_groups(id),  -- NULL = parent, set = child
+    duplicate_event_handling TEXT DEFAULT 'consolidate',       -- ignore, consolidate, separate
+
     -- Stats (updated after each generation)
     last_refresh TIMESTAMP,                        -- Last time EPG was generated
     stream_count INTEGER DEFAULT 0,                -- Number of streams in group
@@ -644,6 +659,7 @@ CREATE TABLE IF NOT EXISTS event_epg_groups (
 
 CREATE INDEX IF NOT EXISTS idx_event_epg_groups_league ON event_epg_groups(assigned_league);
 CREATE INDEX IF NOT EXISTS idx_event_epg_groups_enabled ON event_epg_groups(enabled);
+CREATE INDEX IF NOT EXISTS idx_eeg_parent ON event_epg_groups(parent_group_id) WHERE parent_group_id IS NOT NULL;
 
 -- Trigger for updated_at
 CREATE TRIGGER IF NOT EXISTS update_event_epg_groups_timestamp
@@ -677,7 +693,7 @@ CREATE INDEX IF NOT EXISTS idx_team_aliases_league ON team_aliases(league);
 CREATE INDEX IF NOT EXISTS idx_team_aliases_alias ON team_aliases(alias);
 
 -- =============================================================================
--- MANAGED CHANNELS TABLE (Channel Lifecycle Management)
+-- MANAGED CHANNELS TABLE (Channel Lifecycle Management v2)
 -- Tracks channels created by Teamarr in Dispatcharr
 -- =============================================================================
 
@@ -686,33 +702,57 @@ CREATE TABLE IF NOT EXISTS managed_channels (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
-    -- Foreign Keys
+    -- ========== IDENTITY ==========
     event_epg_group_id INTEGER NOT NULL REFERENCES event_epg_groups(id) ON DELETE CASCADE,
-
-    -- Dispatcharr IDs
     dispatcharr_channel_id INTEGER NOT NULL UNIQUE,
-    dispatcharr_stream_id INTEGER NOT NULL,
-    dispatcharr_logo_id INTEGER,             -- For cleanup when channel is deleted
+    espn_event_id TEXT NOT NULL,
+    tvg_id TEXT NOT NULL,
+    primary_stream_id INTEGER,               -- Stream that created this channel (for 'separate' mode)
 
-    -- Channel Info
+    -- ========== CHANNEL SETTINGS ==========
     channel_number INTEGER NOT NULL,
     channel_name TEXT NOT NULL,
-    tvg_id TEXT,
+    channel_group_id INTEGER,                -- Dispatcharr channel group
+    stream_profile_id INTEGER,               -- Dispatcharr stream profile
+    channel_profile_id INTEGER,              -- Dispatcharr channel profile
+    dispatcharr_logo_id INTEGER,
+    logo_url TEXT,                           -- Source URL used for logo
 
-    -- Event Info
-    espn_event_id TEXT,
-    event_date TEXT,                         -- Full UTC datetime (e.g., "2025-11-28T01:20Z")
+    -- ========== LEGACY (kept for backwards compatibility) ==========
+    dispatcharr_stream_id INTEGER,           -- Primary stream (now in managed_channel_streams)
+
+    -- ========== EVENT CONTEXT ==========
     home_team TEXT,
+    home_team_abbrev TEXT,
+    home_team_logo TEXT,
     away_team TEXT,
+    away_team_abbrev TEXT,
+    away_team_logo TEXT,
+    event_date TEXT,                         -- ISO datetime (UTC)
+    event_name TEXT,
+    league TEXT,
+    sport TEXT,
+    venue TEXT,
+    broadcast TEXT,
 
-    -- Lifecycle
+    -- ========== LIFECYCLE ==========
     scheduled_delete_at TIMESTAMP,
-    deleted_at TIMESTAMP
+    deleted_at TIMESTAMP,
+    delete_reason TEXT,
+    logo_deleted INTEGER,                    -- 1=deleted, 0=failed, NULL=no logo
+
+    -- ========== SYNC STATE ==========
+    last_verified_at TEXT,
+    sync_status TEXT DEFAULT 'created',      -- created, in_sync, drifted, orphaned
+    sync_notes TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_managed_channels_group ON managed_channels(event_epg_group_id);
 CREATE INDEX IF NOT EXISTS idx_managed_channels_event ON managed_channels(espn_event_id);
 CREATE INDEX IF NOT EXISTS idx_managed_channels_delete ON managed_channels(scheduled_delete_at);
+CREATE INDEX IF NOT EXISTS idx_mc_dispatcharr_id ON managed_channels(dispatcharr_channel_id);
+CREATE INDEX IF NOT EXISTS idx_mc_tvg_id ON managed_channels(tvg_id);
+CREATE INDEX IF NOT EXISTS idx_mc_sync_status ON managed_channels(sync_status) WHERE deleted_at IS NULL;
 
 -- Trigger for updated_at
 CREATE TRIGGER IF NOT EXISTS update_managed_channels_timestamp
@@ -721,6 +761,75 @@ FOR EACH ROW
 BEGIN
     UPDATE managed_channels SET updated_at = CURRENT_TIMESTAMP WHERE id = OLD.id;
 END;
+
+-- =============================================================================
+-- MANAGED CHANNEL STREAMS TABLE (Multi-Stream Support)
+-- Tracks all streams attached to a managed channel
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS managed_channel_streams (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    managed_channel_id INTEGER NOT NULL,
+    dispatcharr_stream_id INTEGER NOT NULL,
+
+    -- ========== STREAM INFO ==========
+    stream_name TEXT,
+    m3u_account_id INTEGER,
+    m3u_account_name TEXT,
+
+    -- ========== SOURCE TRACKING ==========
+    source_group_id INTEGER NOT NULL,        -- Which group contributed this stream
+    source_group_type TEXT NOT NULL DEFAULT 'parent',  -- 'parent' or 'child'
+
+    -- ========== ORDERING ==========
+    priority INTEGER DEFAULT 0,              -- 0 = primary, higher = failover
+
+    -- ========== LIFECYCLE ==========
+    added_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    removed_at TEXT,
+    remove_reason TEXT,
+
+    -- ========== SYNC STATE ==========
+    last_verified_at TEXT,
+    in_dispatcharr INTEGER DEFAULT 1,        -- 1=confirmed, 0=missing
+
+    FOREIGN KEY (managed_channel_id) REFERENCES managed_channels(id) ON DELETE CASCADE,
+    FOREIGN KEY (source_group_id) REFERENCES event_epg_groups(id)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mcs_unique
+    ON managed_channel_streams(managed_channel_id, dispatcharr_stream_id)
+    WHERE removed_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_mcs_stream ON managed_channel_streams(dispatcharr_stream_id);
+CREATE INDEX IF NOT EXISTS idx_mcs_source_group ON managed_channel_streams(source_group_id);
+CREATE INDEX IF NOT EXISTS idx_mcs_channel ON managed_channel_streams(managed_channel_id);
+
+-- =============================================================================
+-- MANAGED CHANNEL HISTORY TABLE (Audit Trail)
+-- Logs all changes to managed channels for debugging and auditing
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS managed_channel_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    managed_channel_id INTEGER NOT NULL,
+
+    changed_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    change_type TEXT NOT NULL,               -- created, modified, stream_added, stream_removed,
+                                             -- stream_reordered, verified, drifted, deleted, restored
+    change_source TEXT,                      -- epg_generation, reconciliation, manual, external_sync
+
+    field_name TEXT,                         -- Which field changed (NULL for create/delete)
+    old_value TEXT,
+    new_value TEXT,
+
+    notes TEXT,
+
+    FOREIGN KEY (managed_channel_id) REFERENCES managed_channels(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_mch_channel ON managed_channel_history(managed_channel_id, changed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_mch_time ON managed_channel_history(changed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_mch_type ON managed_channel_history(change_type);
 
 -- =============================================================================
 -- END OF SCHEMA

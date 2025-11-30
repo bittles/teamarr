@@ -246,13 +246,22 @@ class ChannelReconciler:
         # Build sets of known identifiers from our managed_channels
         conn = get_connection()
         try:
-            query = """
-                SELECT dispatcharr_channel_id, dispatcharr_uuid
-                FROM managed_channels WHERE deleted_at IS NULL
-            """
-            rows = conn.execute(query).fetchall()
-            known_channel_ids = {row[0] for row in rows if row[0]}
-            known_uuids = {row[1] for row in rows if row[1]}
+            # Try query with UUID column (v2 schema)
+            try:
+                rows = conn.execute("""
+                    SELECT dispatcharr_channel_id, dispatcharr_uuid
+                    FROM managed_channels WHERE deleted_at IS NULL
+                """).fetchall()
+                known_channel_ids = {row[0] for row in rows if row[0]}
+                known_uuids = {row[1] for row in rows if row[1]}
+            except Exception:
+                # UUID column doesn't exist yet - fall back to channel ID only
+                rows = conn.execute("""
+                    SELECT dispatcharr_channel_id
+                    FROM managed_channels WHERE deleted_at IS NULL
+                """).fetchall()
+                known_channel_ids = {row[0] for row in rows if row[0]}
+                known_uuids = set()
         finally:
             conn.close()
 

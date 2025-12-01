@@ -2488,23 +2488,6 @@ def dispatcharr_refresh_provider_names():
                 )
                 updated_count += 1
 
-        # Also update managed_channels
-        cursor.execute("SELECT id, m3u_account_id, m3u_account_name FROM managed_channels WHERE m3u_account_id IS NOT NULL")
-        channels = cursor.fetchall()
-
-        for channel in channels:
-            channel_id = channel[0]
-            account_id = channel[1]
-            old_name = channel[2]
-            new_name = account_map.get(account_id)
-
-            if new_name and new_name != old_name:
-                cursor.execute(
-                    "UPDATE managed_channels SET m3u_account_name = ? WHERE id = ?",
-                    (new_name, channel_id)
-                )
-                updated_count += 1
-
         conn.commit()
         conn.close()
 

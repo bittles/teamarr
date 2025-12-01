@@ -196,14 +196,30 @@ class EventMatcher:
             else:
                 logger.debug(f"No game on target date {target_date}, using nearest")
 
-        # No date provided or no date match - prioritize today, then upcoming
+        # No date provided or no date match - prioritize today's games (including finals), then upcoming
         now = datetime.now(ZoneInfo('UTC'))
         today = now.date()
 
+        # Check for today's games first
         todays_games = [e for e in matching_events if e['event_date'].date() == today]
         if todays_games:
             logger.debug(f"Selected today's game: {todays_games[0]['event_id']}")
             return todays_games[0]
+
+        # No today's games - check for games that have already started/finished today
+        # This handles timezone edge cases where a game at 7pm EST on Nov 30
+        # would be 12am UTC on Dec 1, causing 'today' in UTC to miss it
+        # Look for any game in the past 24 hours that's completed
+        past_24h = now - timedelta(hours=24)
+        recent_completed = [
+            e for e in matching_events
+            if e['event_date'] >= past_24h and e['event_date'] < now
+        ]
+        if recent_completed:
+            # Sort by date descending (most recent first) and return the most recent
+            recent_completed.sort(key=lambda x: x['event_date'], reverse=True)
+            logger.debug(f"Selected recent completed game: {recent_completed[0]['event_id']}")
+            return recent_completed[0]
 
         upcoming = [e for e in matching_events if e['event_date'] >= now]
         if upcoming:
@@ -746,7 +762,7 @@ class EventMatcher:
             sport = config.get('sport', api_path.split('/')[0])
 
             # Use scoreboard API to get the event (faster)
-            scoreboard = self.espn_client.get_scoreboard(api_path)
+            scoreboard = self.espn.get_scoreboard(api_path)
             event = None
 
             if scoreboard:
@@ -761,7 +777,7 @@ class EventMatcher:
                 # Event not on today's scoreboard - try event summary endpoint
                 # This works for finished games that rolled off the scoreboard
                 logger.debug(f"Event {event_id} not on scoreboard, trying summary endpoint")
-                event = self.espn_client.get_event_summary(sport, league, event_id)
+                event = self.espn.get_event_summary(sport, league, event_id)
 
             if not event:
                 logger.debug(f"Event {event_id} not found for {league}")

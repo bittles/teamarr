@@ -559,7 +559,8 @@ class EventMatcher:
                     'name': status_type.get('name'),
                     'state': status_type.get('state'),
                     'completed': status_type.get('completed', False),
-                    'detail': status_type.get('detail') or status_type.get('shortDetail')
+                    'detail': status_type.get('detail') or status_type.get('shortDetail'),
+                    'period': status.get('period', 0)  # For overtime detection
                 }
 
             # Update scores and records (real-time from scoreboard)

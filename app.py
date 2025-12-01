@@ -4635,11 +4635,11 @@ def api_event_epg_test_regex(group_id):
             settings.get('dispatcharr_password', '')
         )
 
-        result = m3u.get_group_streams(group['dispatcharr_group_id'])
-        if not result.get('success'):
-            return jsonify({'error': 'Could not fetch streams from Dispatcharr'}), 500
+        streams = m3u.list_streams(group_id=group['dispatcharr_group_id'])
+        if not streams:
+            return jsonify({'error': 'No streams found for this group'}), 404
 
-        streams = result.get('streams', [])[:limit]
+        streams = streams[:limit]
 
         # Test regex against each stream
         team_matcher = create_matcher()

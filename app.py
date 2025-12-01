@@ -467,8 +467,9 @@ def refresh_event_group_core(group, m3u_manager, skip_m3u_refresh=False, epg_sta
             log_parts.append(f"{total_event_excluded} event excluded ({filtered_outside_lookahead} past, {filtered_final} final)")
         app.logger.debug(" | ".join(log_parts))
 
-        # Check if template is assigned
-        if not group.get('event_template_id'):
+        # Check if template is assigned (child groups inherit from parent, so they don't need one)
+        is_child_group = group.get('parent_group_id') is not None
+        if not group.get('event_template_id') and not is_child_group:
             app.logger.debug(f"No template assigned to group '{group['group_name']}' - skipping EPG generation")
             return {
                 'success': False,
@@ -483,57 +484,57 @@ def refresh_event_group_core(group, m3u_manager, skip_m3u_refresh=False, epg_sta
                 'error': 'No event template assigned to this group'
             }
 
-        # Step 4: Generate XMLTV
+        # Step 4: Generate XMLTV (or add streams to parent for child groups)
         epg_result = None
         channel_results = None
 
         if matched_streams:
-            # Settings already fetched at start of function
-            event_template = None
-            if group.get('event_template_id'):
-                event_template = get_template(group['event_template_id'])
-
-            # Use settings output path to derive data directory (keeps all files together)
-            output_path = settings.get('epg_output_path', '/app/data/teamarr.xml')
-
             # Sort matched streams by event start time (earliest first)
-            # This ensures channels appear in chronological order in the EPG
             sorted_matched = sorted(
                 matched_streams,
                 key=lambda m: m['event'].get('date', '') or ''
             )
 
-            epg_result = generate_event_epg(
-                matched_streams=sorted_matched,
-                group_info=group,
-                save=True,
-                data_dir=get_data_dir(output_path),
-                settings=settings,
-                template=event_template,
-                epg_start_datetime=epg_start_datetime
-            )
+            # Child groups: skip EPG generation, just add streams to parent channels
+            if is_child_group:
+                # Child groups don't generate EPG - they just add streams to parent channels
+                pass  # EPG generation skipped for child groups
+            else:
+                # Parent groups: Generate EPG
+                event_template = None
+                if group.get('event_template_id'):
+                    event_template = get_template(group['event_template_id'])
 
-            if not epg_result.get('success'):
-                return {
-                    'success': False,
-                    'stream_count': len(streams),
-                    'matched_count': matched_count,
-                    'matched_streams': matched_streams,
-                    'error': f"EPG generation failed: {epg_result.get('error')}",
-                    'step': 'generate'
-                }
+                # Use settings output path to derive data directory
+                output_path = settings.get('epg_output_path', '/app/data/teamarr.xml')
 
-            app.logger.debug(f"Generated event EPG: {epg_result.get('file_path')}")
+                epg_result = generate_event_epg(
+                    matched_streams=sorted_matched,
+                    group_info=group,
+                    save=True,
+                    data_dir=get_data_dir(output_path),
+                    settings=settings,
+                    template=event_template,
+                    epg_start_datetime=epg_start_datetime
+                )
 
-            # Consolidate all event EPGs
-            final_output_path = settings.get('epg_output_path', '/app/data/teamarr.xml')
+                if not epg_result.get('success'):
+                    return {
+                        'success': False,
+                        'stream_count': len(streams),
+                        'matched_count': matched_count,
+                        'matched_streams': matched_streams,
+                        'error': f"EPG generation failed: {epg_result.get('error')}",
+                        'step': 'generate'
+                    }
 
-            consolidate_result = after_event_epg_generation(group_id, final_output_path)
+                app.logger.debug(f"Generated event EPG: {epg_result.get('file_path')}")
+
+                # Consolidate all event EPGs
+                final_output_path = settings.get('epg_output_path', '/app/data/teamarr.xml')
+                consolidate_result = after_event_epg_generation(group_id, final_output_path)
 
             # Step 5: Channel Lifecycle Management
-            # Check if this is a child group (streams go to parent's channels)
-            is_child_group = group.get('parent_group_id') is not None
-
             if is_child_group:
                 # Child group: Add streams to parent group's channels
                 from epg.channel_lifecycle import get_lifecycle_manager

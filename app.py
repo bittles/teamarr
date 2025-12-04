@@ -2759,27 +2759,30 @@ def serve_epg():
 
 @app.route('/api/parse-espn-url', methods=['POST'])
 def api_parse_espn_url():
-    """Parse ESPN URL and fetch team data"""
+    """Parse ESPN URL and fetch team data
+
+    Supports multiple ESPN URL patterns:
+    - Pro sports: https://www.espn.com/nba/team/_/name/det/detroit-pistons
+    - College sports: https://www.espn.com/college-football/team/_/id/130/michigan-wolverines
+    - Soccer clubs: https://www.espn.com/soccer/club/_/id/21422/angel-city-fc
+    """
     try:
-        url = request.json.get('url', '')
+        url = request.json.get('url', '').strip()
 
-        # Extract team info from URL
-        # ESPN URL format: https://www.espn.com/nba/team/_/name/det/detroit-pistons
-        import re
-        match = re.search(r'espn\.com/([^/]+)/team/_/name/([^/]+)/([^/]+)', url)
+        if not url:
+            return jsonify({'success': False, 'message': 'Please provide an ESPN team URL'})
 
-        if not match:
-            return jsonify({'success': False, 'message': 'Invalid ESPN URL format'})
-
-        league = match.group(1)  # nba, nfl, etc.
-        team_slug = match.group(2)  # det, dal, etc.
-
-        # Fetch team data from ESPN API
+        # Fetch team data from ESPN API (handles URL parsing internally)
         espn_client = ESPNClient()
         team_data = espn_client.get_team_info_from_url(url)
 
         if not team_data:
-            return jsonify({'success': False, 'message': 'Could not fetch team data from ESPN'})
+            return jsonify({
+                'success': False,
+                'message': 'Could not fetch team data. Please verify the URL is a valid ESPN team page '
+                          '(e.g., espn.com/nba/team/_/name/det/detroit-pistons or '
+                          'espn.com/college-football/team/_/id/130/michigan-wolverines)'
+            })
 
         # Fetch default channel ID format from settings and generate suggested channel_id
         conn = get_connection()

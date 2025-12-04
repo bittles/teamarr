@@ -690,6 +690,76 @@ class ESPNClient:
 
         return None
 
+    def get_team_info_from_url(self, url: str) -> Optional[Dict]:
+        """
+        Fetch team information from an ESPN URL
+
+        Parses the URL to extract sport/league/team identifiers,
+        then fetches the full team data from the ESPN API.
+
+        Args:
+            url: ESPN team URL (e.g., https://www.espn.com/nba/team/_/name/det/detroit-pistons)
+
+        Returns:
+            Dict with team data formatted for Teamarr team creation:
+            {
+                'team_name': 'Detroit Pistons',
+                'team_abbrev': 'DET',
+                'team_slug': 'det',
+                'league': 'nba',
+                'sport': 'basketball',
+                'espn_team_id': '8',
+                'team_logo_url': 'https://...',
+                'team_color': '006BB6'
+            }
+        """
+        # Extract sport, league, and team slug from URL
+        url_info = self.extract_team_from_url(url)
+        if not url_info:
+            logger.warning(f"Could not parse ESPN URL: {url}")
+            return None
+
+        sport = url_info['sport']
+        league = url_info['league']
+        team_slug = url_info['team_slug']
+
+        # Fetch team data from ESPN API
+        # Try by slug first, fall back to ID if slug is numeric
+        team_data = self.get_team_info(sport, league, team_slug)
+
+        if not team_data or 'team' not in team_data:
+            logger.warning(f"Could not fetch team data for {team_slug} in {league}")
+            return None
+
+        team = team_data['team']
+
+        # Extract logo URL
+        logo_url = None
+        if team.get('logos') and len(team['logos']) > 0:
+            logo_url = team['logos'][0].get('href', '')
+
+        # Map internal league codes back to display codes for storage
+        # e.g., mens-college-basketball -> ncaam for consistency
+        league_code_mapping = {
+            'mens-college-basketball': 'ncaam',
+            'womens-college-basketball': 'ncaaw',
+            'college-football': 'ncaaf',
+            'usa.1': 'mls',
+            'eng.1': 'epl',
+        }
+        stored_league = league_code_mapping.get(league, league)
+
+        return {
+            'team_name': team.get('displayName') or team.get('name', ''),
+            'team_abbrev': team.get('abbreviation', ''),
+            'team_slug': team.get('slug', team_slug),
+            'league': stored_league,
+            'sport': sport,
+            'espn_team_id': str(team.get('id', '')),
+            'team_logo_url': logo_url or '',
+            'team_color': team.get('color', '')
+        }
+
     def get_league_teams(self, sport: str, league: str) -> Optional[List[Dict]]:
         """
         Fetch all teams in a league from ESPN API

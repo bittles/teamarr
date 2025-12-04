@@ -416,6 +416,9 @@ class TeamMatcher:
         # Also remove hour-only times like "1pm", "8pm", "12am"
         text = re.sub(r'\b\d{1,2}\s*(am|pm)\b\s*', '', text, flags=re.I)
 
+        # Remove standalone timezone abbreviations (ET, EST, PT, GMT, etc.)
+        text = re.sub(r'\b(et|est|pt|pst|ct|cst|mt|mst|gmt|utc)\b', '', text, flags=re.I)
+
         # Remove dates (e.g., "11/23", "2025-11-26", "Nov 26")
         text = re.sub(r'\d{1,2}/\d{1,2}(/\d{2,4})?\s*', '', text)
         text = re.sub(r'\d{4}-\d{2}-\d{2}\s*', '', text)
@@ -431,13 +434,56 @@ class TeamMatcher:
         # Remove special characters but keep spaces
         text = re.sub(r'[|:\-#\[\]]+', ' ', text)
 
-        # Remove "FC", "SC", "CF" suffixes for soccer (keep as optional)
-        # Don't remove - these are part of team names
+        # Remove periods (normalizes "St." to "St")
+        text = re.sub(r'\.', '', text)
+
+        # Remove trailing @ (leftover from "@ Dec 03" after date removal)
+        text = re.sub(r'\s*@\s*$', '', text)
 
         # Normalize whitespace
         text = ' '.join(text.split())
 
         return text.strip()
+
+    def _strip_prefix_at_colon(self, text: str) -> str:
+        """
+        Strip everything before first colon, if the colon appears before the game separator.
+
+        This handles stream names like "NCAAW B 14: Washington State vs BYU" where
+        everything before the colon is metadata (league, sport code, stream number).
+
+        Avoids stripping at time colons (e.g., "8:15 PM") by checking if the colon
+        has digits on both sides (digit:digit pattern).
+
+        Args:
+            text: Stream name text
+
+        Returns:
+            Text with prefix stripped, or original if no valid prefix colon found
+        """
+        # Find game separator position
+        sep_pos = len(text)
+        for sep in self.SEPARATORS:
+            pos = text.lower().find(sep)
+            if pos > 0 and pos < sep_pos:
+                sep_pos = pos
+
+        # Find first colon that's NOT part of a time (digit:digit)
+        colon_pos = -1
+        for i, char in enumerate(text):
+            if char == ':':
+                has_digit_before = i > 0 and text[i-1].isdigit()
+                has_digit_after = i < len(text)-1 and text[i+1].isdigit()
+                if has_digit_before and has_digit_after:
+                    continue  # This is a time like "8:15", skip it
+                colon_pos = i
+                break
+
+        # Only strip if valid colon found before separator
+        if colon_pos > 0 and colon_pos < sep_pos:
+            return text[colon_pos + 1:].strip()
+
+        return text
 
     def _normalize_for_stream(self, stream_name: str) -> str:
         """
@@ -465,6 +511,10 @@ class TeamMatcher:
 
         # Remove standalone league prefixes like "NCAA Basketball:", "NCAAM:", "College Basketball:"
         text = re.sub(r'^(ncaa[mfwb]?|college)\s*(basketball|football|hockey)?\s*:?\s*', '', text, flags=re.I)
+
+        # Strip metadata prefix at colon (e.g., "B 14: Team vs Team" -> "Team vs Team")
+        # This handles stream names like "NCAAW B 14: Washington State vs BYU"
+        text = self._strip_prefix_at_colon(text)
 
         # Now apply standard normalization
         return self._normalize_text(text)

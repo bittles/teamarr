@@ -818,47 +818,53 @@ class ChannelLifecycleManager:
                     from database import update_managed_channel
                     update_managed_channel(existing['id'], {'dispatcharr_stream_id': new_stream_id})
 
-            # Check channel_profile_id (handled separately - profiles maintain channel lists)
-            group_channel_profile_id = group.get('channel_profile_id')
-            stored_channel_profile_id = existing.get('channel_profile_id')
+            # Check channel_profile_ids (handled separately - profiles maintain channel lists)
+            # Both are lists (or empty lists)
+            group_profile_ids = set(group.get('channel_profile_ids') or [])
+            stored_profile_ids = set(existing.get('channel_profile_ids') or [])
 
-            if group_channel_profile_id != stored_channel_profile_id:
+            if group_profile_ids != stored_profile_ids:
                 from database import update_managed_channel
+                import json
+
+                profiles_to_add = group_profile_ids - stored_profile_ids
+                profiles_to_remove = stored_profile_ids - group_profile_ids
                 profile_changed = False
 
                 # Serialize Dispatcharr profile operations
                 with self._dispatcharr_lock:
-                    # Remove from old profile if there was one
-                    if stored_channel_profile_id:
+                    # Remove from profiles no longer in the list
+                    for profile_id in profiles_to_remove:
                         remove_result = self.channel_api.remove_channel_from_profile(
-                            stored_channel_profile_id, dispatcharr_channel_id
+                            profile_id, dispatcharr_channel_id
                         )
                         if remove_result.get('success'):
-                            logger.debug(f"Removed channel {dispatcharr_channel_id} from profile {stored_channel_profile_id}")
+                            logger.debug(f"Removed channel {dispatcharr_channel_id} from profile {profile_id}")
                             profile_changed = True
                         else:
                             logger.warning(
-                                f"Failed to remove channel {dispatcharr_channel_id} from profile {stored_channel_profile_id}: "
+                                f"Failed to remove channel {dispatcharr_channel_id} from profile {profile_id}: "
                                 f"{remove_result.get('error')}"
                             )
 
-                    # Add to new profile if there is one
-                    if group_channel_profile_id:
+                    # Add to new profiles
+                    for profile_id in profiles_to_add:
                         add_result = self.channel_api.add_channel_to_profile(
-                            group_channel_profile_id, dispatcharr_channel_id
+                            profile_id, dispatcharr_channel_id
                         )
                         if add_result.get('success'):
-                            logger.debug(f"Added channel {dispatcharr_channel_id} to profile {group_channel_profile_id}")
+                            logger.debug(f"Added channel {dispatcharr_channel_id} to profile {profile_id}")
                             profile_changed = True
                         else:
                             logger.warning(
-                                f"Failed to add channel {dispatcharr_channel_id} to profile {group_channel_profile_id}: "
+                                f"Failed to add channel {dispatcharr_channel_id} to profile {profile_id}: "
                                 f"{add_result.get('error')}"
                             )
 
-                # Update our record with the new profile ID
+                # Update our record with the new profile IDs
                 if profile_changed:
-                    update_managed_channel(existing['id'], {'channel_profile_id': group_channel_profile_id})
+                    new_profile_ids_json = json.dumps(list(group_profile_ids)) if group_profile_ids else None
+                    update_managed_channel(existing['id'], {'channel_profile_ids': new_profile_ids_json})
 
                     # Track in results
                     if 'profile_updated' not in results:
@@ -866,8 +872,8 @@ class ChannelLifecycleManager:
                     results['profile_updated'].append({
                         'channel_name': stored_channel_name,
                         'channel_id': dispatcharr_channel_id,
-                        'old_profile': stored_channel_profile_id,
-                        'new_profile': group_channel_profile_id
+                        'profiles_added': list(profiles_to_add),
+                        'profiles_removed': list(profiles_to_remove)
                     })
 
             if not update_data:
@@ -954,7 +960,7 @@ class ChannelLifecycleManager:
         channel_start = group.get('channel_start')
         channel_group_id = group.get('channel_group_id')  # Dispatcharr channel group
         stream_profile_id = group.get('stream_profile_id')  # Dispatcharr stream profile
-        channel_profile_id = group.get('channel_profile_id')  # Dispatcharr channel profile
+        channel_profile_ids = group.get('channel_profile_ids') or []  # Dispatcharr channel profiles (list)
         create_timing = global_settings['channel_create_timing']
         delete_timing = global_settings['channel_delete_timing']
         sport = group.get('assigned_sport')
@@ -1171,18 +1177,20 @@ class ChannelLifecycleManager:
                 dispatcharr_channel_id = dispatcharr_channel['id']
                 dispatcharr_uuid = dispatcharr_channel.get('uuid')  # Immutable identifier
 
-                # Add to channel profile if configured
-                if channel_profile_id:
+                # Add to channel profiles if configured (supports multiple)
+                added_to_profiles = []
+                for profile_id in channel_profile_ids:
                     profile_result = self.channel_api.add_channel_to_profile(
-                        channel_profile_id, dispatcharr_channel_id
+                        profile_id, dispatcharr_channel_id
                     )
                     if not profile_result.get('success'):
                         logger.warning(
-                            f"Failed to add channel {dispatcharr_channel_id} to profile {channel_profile_id}: "
+                            f"Failed to add channel {dispatcharr_channel_id} to profile {profile_id}: "
                             f"{profile_result.get('error')}"
                         )
                     else:
-                        logger.debug(f"Added channel {dispatcharr_channel_id} to profile {channel_profile_id}")
+                        logger.debug(f"Added channel {dispatcharr_channel_id} to profile {profile_id}")
+                        added_to_profiles.append(profile_id)
 
             # Note: EPG association happens AFTER EPG refresh in Dispatcharr
             # See associate_epg_with_channels() method
@@ -1233,7 +1241,7 @@ class ChannelLifecycleManager:
                     away_team=away_team,
                     scheduled_delete_at=delete_at.isoformat() if delete_at else None,
                     dispatcharr_logo_id=logo_id,
-                    channel_profile_id=channel_profile_id,
+                    channel_profile_ids=added_to_profiles if added_to_profiles else None,
                     dispatcharr_uuid=dispatcharr_uuid,
                     # V2 fields
                     primary_stream_id=stream['id'] if duplicate_mode == 'separate' else None,

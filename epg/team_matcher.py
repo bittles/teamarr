@@ -199,7 +199,7 @@ class TeamMatcher:
     """
 
     # Team vs team separators (order matters - check longer ones first)
-    SEPARATORS = [' vs. ', ' vs ', ' at ', ' @ ', ' v. ', ' v ']
+    SEPARATORS = [' vs. ', ' vs ', ' at ', ' @ ', ' v. ', ' v ', ' x ']
 
     # Cache duration for team lists (1 hour)
     CACHE_DURATION = timedelta(hours=1)
@@ -293,10 +293,11 @@ class TeamMatcher:
 
     def _fetch_college_teams(self, sport: str, league: str) -> List[Dict]:
         """
-        Fetch all teams for a college league using the teams endpoint with limit=500.
+        Fetch all teams for a college league using get_all_teams_by_conference().
 
-        This is much faster than the old conference-by-conference approach.
-        ESPN's /teams?limit=500 returns all teams in a single call.
+        This combines teams from both /groups and /teams endpoints to ensure
+        we don't miss any teams. ESPN's /teams?limit=500 returns 362 teams but
+        misses ~3 recently-transitioned D1 schools that only appear in /groups.
 
         Args:
             sport: Sport (e.g., 'basketball', 'football')
@@ -305,13 +306,24 @@ class TeamMatcher:
         Returns:
             List of all team dicts
         """
-        logger.info(f"Fetching college teams for {league} via get_league_teams")
+        logger.info(f"Fetching college teams for {league} via get_all_teams_by_conference")
 
-        # Use the fast endpoint - get_league_teams now includes ?limit=500
-        teams = self.espn.get_league_teams(sport, league)
-        if not teams:
-            logger.warning(f"No teams found for {league}")
-            return []
+        # Use get_all_teams_by_conference which merges /groups and /teams endpoints
+        # This ensures we get ALL teams including recently-transitioned schools
+        conferences = self.espn.get_all_teams_by_conference(sport, league)
+        if not conferences:
+            # Fall back to simple teams list
+            logger.warning(f"No conference data for {league}, falling back to get_league_teams")
+            teams = self.espn.get_league_teams(sport, league)
+            if not teams:
+                logger.warning(f"No teams found for {league}")
+                return []
+            return teams
+
+        # Flatten conference structure to single list
+        teams = []
+        for conf in conferences:
+            teams.extend(conf.get('teams', []))
 
         logger.info(f"Fetched {len(teams)} college teams for {league}")
         return teams
@@ -416,6 +428,9 @@ class TeamMatcher:
         # Also remove hour-only times like "1pm", "8pm", "12am"
         text = re.sub(r'\b\d{1,2}\s*(am|pm)\b\s*', '', text, flags=re.I)
 
+        # Remove standalone timezone abbreviations (ET, EST, PT, GMT, etc.)
+        text = re.sub(r'\b(et|est|pt|pst|ct|cst|mt|mst|gmt|utc)\b', '', text, flags=re.I)
+
         # Remove dates (e.g., "11/23", "2025-11-26", "Nov 26")
         text = re.sub(r'\d{1,2}/\d{1,2}(/\d{2,4})?\s*', '', text)
         text = re.sub(r'\d{4}-\d{2}-\d{2}\s*', '', text)
@@ -431,13 +446,56 @@ class TeamMatcher:
         # Remove special characters but keep spaces
         text = re.sub(r'[|:\-#\[\]]+', ' ', text)
 
-        # Remove "FC", "SC", "CF" suffixes for soccer (keep as optional)
-        # Don't remove - these are part of team names
+        # Remove periods (normalizes "St." to "St")
+        text = re.sub(r'\.', '', text)
+
+        # Remove trailing @ (leftover from "@ Dec 03" after date removal)
+        text = re.sub(r'\s*@\s*$', '', text)
 
         # Normalize whitespace
         text = ' '.join(text.split())
 
         return text.strip()
+
+    def _strip_prefix_at_colon(self, text: str) -> str:
+        """
+        Strip everything before first colon, if the colon appears before the game separator.
+
+        This handles stream names like "NCAAW B 14: Washington State vs BYU" where
+        everything before the colon is metadata (league, sport code, stream number).
+
+        Avoids stripping at time colons (e.g., "8:15 PM") by checking if the colon
+        has digits on both sides (digit:digit pattern).
+
+        Args:
+            text: Stream name text
+
+        Returns:
+            Text with prefix stripped, or original if no valid prefix colon found
+        """
+        # Find game separator position
+        sep_pos = len(text)
+        for sep in self.SEPARATORS:
+            pos = text.lower().find(sep)
+            if pos > 0 and pos < sep_pos:
+                sep_pos = pos
+
+        # Find first colon that's NOT part of a time (digit:digit)
+        colon_pos = -1
+        for i, char in enumerate(text):
+            if char == ':':
+                has_digit_before = i > 0 and text[i-1].isdigit()
+                has_digit_after = i < len(text)-1 and text[i+1].isdigit()
+                if has_digit_before and has_digit_after:
+                    continue  # This is a time like "8:15", skip it
+                colon_pos = i
+                break
+
+        # Only strip if valid colon found before separator
+        if colon_pos > 0 and colon_pos < sep_pos:
+            return text[colon_pos + 1:].strip()
+
+        return text
 
     def _normalize_for_stream(self, stream_name: str) -> str:
         """
@@ -466,6 +524,10 @@ class TeamMatcher:
         # Remove standalone league prefixes like "NCAA Basketball:", "NCAAM:", "College Basketball:"
         text = re.sub(r'^(ncaa[mfwb]?|college)\s*(basketball|football|hockey)?\s*:?\s*', '', text, flags=re.I)
 
+        # Strip metadata prefix at colon (e.g., "B 14: Team vs Team" -> "Team vs Team")
+        # This handles stream names like "NCAAW B 14: Washington State vs BYU"
+        text = self._strip_prefix_at_colon(text)
+
         # Now apply standard normalization
         return self._normalize_text(text)
 
@@ -490,15 +552,16 @@ class TeamMatcher:
         """
         Find a team match in the given text.
 
-        Matching priority:
-        1. Exact match with primary name (team-specific: nickname, full name, abbrev)
-        2. Exact match with secondary name (location-only)
-        3. Primary name appears as whole word in text
-        4. Secondary name appears as whole word in text
-        5. Prefix/substring matches (fallback)
+        Matching priority (longer matches preferred within each tier):
+        1. Exact match - immediate return
+        2. Input text is prefix of a team's full name (e.g., "washington state" matches
+           "washington state cougars") - this catches partial team names
+        3. Team name appears as whole word in input text
+        4. Team name is prefix of input text (fallback)
 
-        This ensures "los angeles clippers" matches Clippers (via "clippers")
-        rather than Lakers (via "los angeles" location).
+        The key insight is that "washington state" should match Washington State Cougars
+        (because input is prefix of "washington state cougars") rather than Washington
+        Huskies (where "washington" appears as a word in input).
 
         Args:
             text: Normalized text to search in
@@ -511,16 +574,21 @@ class TeamMatcher:
         if not text:
             return None
 
-        # Track matches by priority tier
-        primary_word_match = None
-        primary_word_length = 0
-        secondary_word_match = None
-        secondary_word_length = 0
-        fallback_match = None
-        fallback_length = 0
+        # Track matches by tier, keeping the longest match in each tier
+        # Tier 1: Input is prefix of search name (e.g., "washington state" prefix of "washington state cougars")
+        input_prefix_match = None
+        input_prefix_length = 0
+
+        # Tier 2: Word boundary match (search name appears as whole word in input)
+        word_match = None
+        word_match_length = 0
+
+        # Tier 3: Search name is prefix of input (e.g., "washington" prefix of "washington state")
+        name_prefix_match = None
+        name_prefix_length = 0
 
         for team in teams:
-            # Check primary names first (team-specific: nickname, displayName, abbreviation)
+            # Check primary names (team-specific: nickname, displayName, abbreviation)
             for search_name in team.get('_primary_names', []):
                 if not search_name:
                     continue
@@ -530,15 +598,29 @@ class TeamMatcher:
                 if text == search_lower:
                     return team
 
-                # Whole word match with primary name
+                # Input is prefix of search name
+                # e.g., "washington state" is prefix of "washington state cougars"
+                if search_lower.startswith(text) and len(text) >= 3:
+                    if len(text) > input_prefix_length:
+                        input_prefix_match = team
+                        input_prefix_length = len(text)
+
+                # Whole word match
                 if len(search_lower) >= 3:
                     pattern = r'\b' + re.escape(search_lower) + r'\b'
                     if re.search(pattern, text):
-                        if len(search_lower) > primary_word_length:
-                            primary_word_match = team
-                            primary_word_length = len(search_lower)
+                        if len(search_lower) > word_match_length:
+                            word_match = team
+                            word_match_length = len(search_lower)
 
-            # Check secondary names (location-only, can be shared between teams)
+                # Search name is prefix of input
+                # e.g., "washington" is prefix of "washington state"
+                if text.startswith(search_lower) and len(search_lower) >= 3:
+                    if len(search_lower) > name_prefix_length:
+                        name_prefix_match = team
+                        name_prefix_length = len(search_lower)
+
+            # Check secondary names (location-only, lower priority)
             for search_name in team.get('_secondary_names', []):
                 if not search_name:
                     continue
@@ -548,34 +630,28 @@ class TeamMatcher:
                 if text == search_lower:
                     return team
 
-                # Whole word match with secondary name
+                # Only check word boundary for secondary names (not prefix matches)
+                # to avoid location-only matches taking precedence
                 if len(search_lower) >= 3:
                     pattern = r'\b' + re.escape(search_lower) + r'\b'
                     if re.search(pattern, text):
-                        if len(search_lower) > secondary_word_length:
-                            secondary_word_match = team
-                            secondary_word_length = len(search_lower)
+                        # Only use if we don't have a better primary match
+                        if len(search_lower) > word_match_length and not input_prefix_match:
+                            word_match = team
+                            word_match_length = len(search_lower)
 
-            # Fallback: check all search names for prefix/substring matches
-            for search_name in team.get('_search_names', []):
-                if not search_name:
-                    continue
-                search_lower = search_name.lower()
-
-                # Prefix match
-                if text.startswith(search_lower) or search_lower.startswith(text):
-                    match_len = max(len(search_lower), len(text))
-                    if match_len > fallback_length:
-                        fallback_match = team
-                        fallback_length = match_len
-
-        # Return by priority: primary word match beats secondary, which beats fallback
-        if primary_word_match:
-            return primary_word_match
-        if secondary_word_match:
-            return secondary_word_match
-        if fallback_match:
-            return fallback_match
+        # Return best match, preferring longer matches
+        # Compare across tiers - a significantly longer match should win
+        if input_prefix_match and input_prefix_length >= word_match_length:
+            return input_prefix_match
+        if word_match and word_match_length > name_prefix_length:
+            return word_match
+        if input_prefix_match:
+            return input_prefix_match
+        if word_match:
+            return word_match
+        if name_prefix_match:
+            return name_prefix_match
 
         return None
 
@@ -853,105 +929,6 @@ class TeamMatcher:
                 return result
 
         # Both teams found - populate result
-        result['matched'] = True
-        result['away_team_id'] = away_team.get('id')
-        result['away_team_name'] = away_team.get('name')
-        result['away_team_abbrev'] = away_team.get('abbreviation', '')
-        result['home_team_id'] = home_team.get('id')
-        result['home_team_name'] = home_team.get('name')
-        result['home_team_abbrev'] = home_team.get('abbreviation', '')
-
-        return result
-
-    def extract_teams_with_regex(
-        self,
-        stream_name: str,
-        regex_pattern: str,
-        league: str
-    ) -> Dict[str, Any]:
-        """
-        Extract team matchup using a custom regex pattern.
-
-        The regex must have named capture groups:
-        - team1 (required): First team name
-        - team2 (required): Second team name
-        - game_date (optional): Date string (will attempt to parse)
-        - game_time (optional): Time string (will attempt to parse)
-
-        Example regex: r'(?P<team1>\w+)\s*[-@vs]+\s*(?P<team2>\w+)'
-
-        Args:
-            stream_name: Raw stream/channel name
-            regex_pattern: Regex pattern with named groups
-            league: League code for team resolution
-
-        Returns:
-            Dict with same structure as extract_teams()
-        """
-        result = {
-            'matched': False,
-            'stream_name': stream_name,
-            'league': league,
-            'game_date': None,
-            'game_time': None
-        }
-
-        # Validate and apply regex
-        try:
-            match = re.search(regex_pattern, stream_name, re.IGNORECASE)
-        except re.error as e:
-            result['reason'] = f'Invalid regex pattern: {e}'
-            return result
-
-        if not match:
-            result['reason'] = 'Regex did not match stream name'
-            return result
-
-        groups = match.groupdict()
-
-        # Check required groups
-        team1_text = groups.get('team1', '').strip()
-        team2_text = groups.get('team2', '').strip()
-
-        if not team1_text:
-            result['reason'] = 'Regex matched but team1 group is empty'
-            return result
-
-        if not team2_text:
-            result['reason'] = 'Regex matched but team2 group is empty'
-            return result
-
-        result['raw_away'] = team1_text
-        result['raw_home'] = team2_text
-
-        # Parse optional date/time groups
-        if groups.get('game_date'):
-            result['game_date'] = extract_date_from_text(groups['game_date'])
-
-        if groups.get('game_time'):
-            result['game_time'] = extract_time_from_text(groups['game_time'])
-
-        # Get teams for this league
-        teams = self._get_teams_for_league(league)
-        if not teams:
-            result['reason'] = f'No team data available for league: {league}'
-            return result
-
-        # Resolve team names to ESPN IDs
-        away_team = self._find_team(team1_text, league, teams)
-        home_team = self._find_team(team2_text, league, teams)
-
-        if not away_team:
-            result['reason'] = f'Team not found in ESPN database: {team1_text}'
-            result['unmatched_team'] = team1_text
-            return result
-
-        if not home_team:
-            result['reason'] = f'Team not found in ESPN database: {team2_text}'
-            result['unmatched_team'] = team2_text
-            return result
-
-        # Both teams found
         result['matched'] = True
         result['away_team_id'] = away_team.get('id')
         result['away_team_name'] = away_team.get('name')

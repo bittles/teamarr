@@ -175,14 +175,24 @@
             </div>
 
             <div class="form-group">
-                <label for="channel_profile_id">Channel Profile</label>
-                <div style="margin-bottom: 0.5rem;">
-                    <input type="text" id="channel-profile-filter" class="form-control" placeholder="Filter profiles..." oninput="filterChannelProfiles()">
+                <label for="channel_profile_ids">Channel Profiles</label>
+                <div style="margin-bottom: 0.5rem; display: flex; gap: 0.5rem;">
+                    <input type="text" id="channel-profile-filter" class="form-control" placeholder="Filter profiles..." oninput="filterChannelProfiles()" style="flex: 1;">
+                    <button type="button" class="btn btn-secondary btn-sm" onclick="clearChannelProfiles()" title="Clear selection">Clear</button>
+                    <button type="button" class="btn btn-sm btn-secondary" onclick="toggleCreateChannelProfileForm()">+ New</button>
                 </div>
-                <select id="channel_profile_id" name="channel_profile_id" class="form-control" size="4" style="height: auto;">
+                <div id="create-channel-profile-form" style="display: none; margin-bottom: 0.5rem; padding: 0.5rem; background: var(--bg-tertiary); border-radius: 4px;">
+                    <div style="display: flex; gap: 0.5rem; align-items: center;">
+                        <input type="text" id="new-channel-profile-name" class="form-control" placeholder="New profile name..." style="flex: 1;">
+                        <button type="button" class="btn btn-sm btn-success" onclick="createChannelProfileInline()">Create</button>
+                        <button type="button" class="btn btn-sm btn-secondary" onclick="toggleCreateChannelProfileForm()">Cancel</button>
+                    </div>
+                    <div id="create-channel-profile-status" style="margin-top: 0.25rem; font-size: 0.75rem;"></div>
+                </div>
+                <select id="channel_profile_ids" name="channel_profile_ids" class="form-control" size="4" style="height: auto;" multiple>
                     <option value="">Loading profiles...</option>
                 </select>
-                <small class="form-help">Add created channels to this profile. Leave blank to skip.</small>
+                <small class="form-help">Ctrl/Cmd+click to select multiple. Use Clear button to deselect all.</small>
                 </div>
             </div>
         </div><!-- end independent-settings -->
@@ -327,8 +337,14 @@ document.addEventListener('DOMContentLoaded', async function() {
     {% if mode == 'edit' and group.stream_profile_id %}
     document.getElementById('stream_profile_id').value = '{{ group.stream_profile_id }}';
     {% endif %}
-    {% if mode == 'edit' and group.channel_profile_id %}
-    document.getElementById('channel_profile_id').value = '{{ group.channel_profile_id }}';
+    {% if mode == 'edit' and group.channel_profile_ids %}
+    // Set selected channel profiles (multiselect)
+    const profileIds = {{ group.channel_profile_ids | safe }};
+    const profileSelect = document.getElementById('channel_profile_ids');
+    profileIds.forEach(id => {
+        const option = profileSelect.querySelector(`option[value="${id}"]`);
+        if (option) option.selected = true;
+    });
     {% endif %}
     {% if mode == 'edit' and group.parent_group_id %}
     document.getElementById('parent_group_id').value = '{{ group.parent_group_id }}';
@@ -582,17 +598,18 @@ async function loadChannelProfiles() {
             renderChannelProfiles();
         } else {
             console.error('Failed to load channel profiles:', data.error);
-            document.getElementById('channel_profile_id').innerHTML = '<option value="">(Failed to load profiles)</option>';
+            document.getElementById('channel_profile_ids').innerHTML = '<option value="">(Failed to load profiles)</option>';
         }
     } catch (error) {
         console.error('Error loading channel profiles:', error);
-        document.getElementById('channel_profile_id').innerHTML = '<option value="">(Error loading profiles)</option>';
+        document.getElementById('channel_profile_ids').innerHTML = '<option value="">(Error loading profiles)</option>';
     }
 }
 
 function renderChannelProfiles() {
-    const select = document.getElementById('channel_profile_id');
-    const currentValue = select.value;
+    const select = document.getElementById('channel_profile_ids');
+    // Get currently selected values (multiselect)
+    const selectedValues = Array.from(select.selectedOptions).map(o => o.value);
 
     select.innerHTML = '';
 
@@ -600,18 +617,19 @@ function renderChannelProfiles() {
         const option = document.createElement('option');
         option.value = profile.id;
         option.textContent = profile.name;
+        // Restore selection state
+        if (selectedValues.includes(String(profile.id))) {
+            option.selected = true;
+        }
         select.appendChild(option);
     });
-
-    if (currentValue) {
-        select.value = currentValue;
-    }
 }
 
 function filterChannelProfiles() {
     const filter = document.getElementById('channel-profile-filter').value.toLowerCase();
-    const select = document.getElementById('channel_profile_id');
-    const currentValue = select.value;
+    const select = document.getElementById('channel_profile_ids');
+    // Get currently selected values (multiselect)
+    const selectedValues = Array.from(select.selectedOptions).map(o => o.value);
 
     select.innerHTML = '';
 
@@ -620,12 +638,66 @@ function filterChannelProfiles() {
             const option = document.createElement('option');
             option.value = profile.id;
             option.textContent = profile.name;
+            // Restore selection state
+            if (selectedValues.includes(String(profile.id))) {
+                option.selected = true;
+            }
             select.appendChild(option);
         }
     });
+}
 
-    if (currentValue && select.querySelector(`option[value="${currentValue}"]`)) {
-        select.value = currentValue;
+function clearChannelProfiles() {
+    const select = document.getElementById('channel_profile_ids');
+    Array.from(select.options).forEach(opt => opt.selected = false);
+}
+
+function toggleCreateChannelProfileForm() {
+    const form = document.getElementById('create-channel-profile-form');
+    form.style.display = form.style.display === 'none' ? 'block' : 'none';
+    if (form.style.display === 'block') {
+        document.getElementById('new-channel-profile-name').focus();
+    }
+}
+
+async function createChannelProfileInline() {
+    const name = document.getElementById('new-channel-profile-name').value.trim();
+    const statusDiv = document.getElementById('create-channel-profile-status');
+
+    if (!name) {
+        statusDiv.innerHTML = '<span style="color: var(--danger);">Please enter a profile name</span>';
+        return;
+    }
+
+    statusDiv.innerHTML = '<span style="color: var(--text-muted);">Creating...</span>';
+
+    try {
+        const response = await fetch('/api/dispatcharr/channel-profiles', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: name })
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+            statusDiv.innerHTML = '<span style="color: var(--success);">Created!</span>';
+            document.getElementById('new-channel-profile-name').value = '';
+
+            // Reload profiles and select the new one
+            await loadChannelProfiles();
+            const profileSelect = document.getElementById('channel_profile_ids');
+            const newOption = profileSelect.querySelector(`option[value="${data.profile_id}"]`);
+            if (newOption) newOption.selected = true;
+
+            setTimeout(() => {
+                toggleCreateChannelProfileForm();
+            }, 500);
+        } else {
+            statusDiv.innerHTML = `<span style="color: var(--danger);">${data.error || 'Failed to create profile'}</span>`;
+        }
+    } catch (error) {
+        statusDiv.innerHTML = `<span style="color: var(--danger);">Error: ${error.message}</span>`;
     }
 }
 
@@ -787,6 +859,7 @@ async function testRegexPatterns() {
     const teamsPattern = document.getElementById('custom_regex_teams').value.trim();
     const datePattern = document.getElementById('custom_regex_date').value.trim();
     const timePattern = document.getElementById('custom_regex_time').value.trim();
+    const excludePattern = document.getElementById('stream_exclude_regex').value.trim();
     const resultsDiv = document.getElementById('regex-test-results');
     const testBtn = document.getElementById('test-regex-btn');
 
@@ -812,7 +885,8 @@ async function testRegexPatterns() {
             body: JSON.stringify({
                 teams_pattern: teamsPattern,
                 date_pattern: datePattern || null,
-                time_pattern: timePattern || null
+                time_pattern: timePattern || null,
+                exclude_pattern: excludePattern || null
             })
         });
 
@@ -825,18 +899,32 @@ async function testRegexPatterns() {
 
         let html = '';
         const matched = data.matched || 0;
+        const excluded = data.excluded || 0;
         const total = data.tested || 0;
-        const percentage = total > 0 ? Math.round((matched / total) * 100) : 0;
+        const testedAfterExclude = total - excluded;
+        const percentage = testedAfterExclude > 0 ? Math.round((matched / testedAfterExclude) * 100) : 0;
 
         html = `<div style="margin-bottom: 0.5rem;">
-            <strong>${matched}/${total}</strong> streams matched (${percentage}%)
-        </div>`;
+            <strong>${matched}/${testedAfterExclude}</strong> streams matched (${percentage}%)`;
+        if (excluded > 0) {
+            html += ` · <span style="color: var(--warning);">${excluded} excluded</span>`;
+        }
+        html += `</div>`;
 
         if (data.results && data.results.length > 0) {
             html += '<div class="test-results-list">';
             data.results.forEach(result => {
-                const icon = result.matched ? '✓' : '✗';
-                const color = result.matched ? 'var(--success)' : 'var(--danger)';
+                let icon, color;
+                if (result.excluded) {
+                    icon = '⊘';
+                    color = 'var(--warning)';
+                } else if (result.matched) {
+                    icon = '✓';
+                    color = 'var(--success)';
+                } else {
+                    icon = '✗';
+                    color = 'var(--danger)';
+                }
                 html += `<div class="test-result-item">
                     <div style="color: ${color}; display: flex; align-items: center; gap: 0.25rem;">
                         <span>${icon}</span>
@@ -853,7 +941,7 @@ async function testRegexPatterns() {
                     }
                     html += '</div>';
                 } else if (result.error) {
-                    html += `<div class="test-result-detail" style="color: var(--danger);">${escapeHtml(result.error)}</div>`;
+                    html += `<div class="test-result-detail" style="color: ${result.excluded ? 'var(--warning)' : 'var(--danger)'};">${escapeHtml(result.error)}</div>`;
                 }
                 html += '</div>';
             });
@@ -890,14 +978,16 @@ document.getElementById('event-group-form').addEventListener('submit', async fun
         'stream_exclude_regex_enabled',
         'custom_regex_teams_enabled',
         'custom_regex_date_enabled',
-        'custom_regex_time_enabled',
-        'custom_regex_enabled'  // Legacy - keep for backwards compat
+        'custom_regex_time_enabled'
     ];
 
     formData.forEach((value, key) => {
+        // Skip channel_profile_ids - handled separately as multiselect
+        if (key === 'channel_profile_ids') return;
+
         if (value !== '' && value !== null) {
             // Convert numeric fields
-            if (['channel_start', 'channel_group_id', 'stream_profile_id', 'channel_profile_id', 'event_template_id', 'dispatcharr_group_id', 'dispatcharr_account_id', 'parent_group_id'].includes(key)) {
+            if (['channel_start', 'channel_group_id', 'stream_profile_id', 'event_template_id', 'dispatcharr_group_id', 'dispatcharr_account_id', 'parent_group_id'].includes(key)) {
                 data[key] = value ? parseInt(value) : null;
             } else if (checkboxFields.includes(key)) {
                 data[key] = true;
@@ -913,6 +1003,13 @@ document.getElementById('event-group-form').addEventListener('submit', async fun
             data[field] = false;
         }
     });
+
+    // Handle channel_profile_ids multiselect
+    const profileSelect = document.getElementById('channel_profile_ids');
+    const selectedProfileIds = Array.from(profileSelect.selectedOptions)
+        .map(o => parseInt(o.value))
+        .filter(id => !isNaN(id));
+    data.channel_profile_ids = selectedProfileIds.length > 0 ? selectedProfileIds : null;
 
     // Get channel_group_name from selected option text
     const channelGroupSelect = document.getElementById('channel_group_id');

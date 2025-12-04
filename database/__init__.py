@@ -155,7 +155,7 @@ def db_insert(query: str, params: tuple = ()) -> int:
 #   8: Channel Lifecycle V2 (multi-stream, history, reconciliation, parent groups)
 # =============================================================================
 
-CURRENT_SCHEMA_VERSION = 10
+CURRENT_SCHEMA_VERSION = 11
 
 
 def get_schema_version(conn) -> int:
@@ -194,16 +194,16 @@ def run_migrations(conn):
 
     Migrations are versioned and only run if current version < migration version.
     Each migration is idempotent (safe to run multiple times).
+
+    IMPORTANT: Idempotent column additions run ALWAYS (regardless of version) to
+    handle cases where schema.sql is missing columns. Version checks are only used
+    for one-time data migrations or table creation.
     """
     cursor = conn.cursor()
     current_version = get_schema_version(conn)
     migrations_run = 0
 
     print(f"  📊 Current schema version: {current_version}, target: {CURRENT_SCHEMA_VERSION}")
-
-    if current_version >= CURRENT_SCHEMA_VERSION:
-        print(f"  ✅ Schema is up to date (version {current_version})")
-        return 0
 
     # Helper functions for migrations
     def add_columns_if_missing(table_name, columns):
@@ -374,7 +374,8 @@ def run_migrations(conn):
             ("account_name", "TEXT"),
             ("channel_group_id", "INTEGER"),
             ("stream_profile_id", "INTEGER"),
-            ("channel_profile_id", "INTEGER"),
+            ("channel_profile_id", "INTEGER"),  # Legacy - single profile
+            ("channel_profile_ids", "TEXT"),  # JSON array of profile IDs
             ("custom_regex", "TEXT"),  # Deprecated - legacy single regex
             ("custom_regex_enabled", "INTEGER DEFAULT 0"),  # Deprecated - use individual enables
             ("custom_regex_team1", "TEXT"),  # Deprecated - use custom_regex_teams
@@ -692,6 +693,47 @@ def run_migrations(conn):
     except Exception as e:
         print(f"  ⚠️ Could not create parent group index: {e}")
     conn.commit()
+
+    # =========================================================================
+    # 11. MULTI-CHANNEL PROFILE SUPPORT
+    # =========================================================================
+    # Add channel_profile_ids column to event_epg_groups (JSON array of profile IDs)
+    # Note: add_columns_if_missing is idempotent, runs always
+    add_columns_if_missing("event_epg_groups", [
+        ("channel_profile_ids", "TEXT"),  # JSON array, e.g. "[1, 2, 3]"
+    ])
+
+    # Add channel_profile_ids column to managed_channels (tracks which profiles channel was added to)
+    add_columns_if_missing("managed_channels", [
+        ("channel_profile_ids", "TEXT"),  # JSON array, e.g. "[1, 2, 3]"
+    ])
+
+    # Migrate existing single channel_profile_id to channel_profile_ids array
+    # Note: This is idempotent (only updates rows where channel_profile_ids is NULL/empty)
+    try:
+        # For event_epg_groups
+        cursor.execute("""
+            UPDATE event_epg_groups
+            SET channel_profile_ids = '[' || channel_profile_id || ']'
+            WHERE channel_profile_id IS NOT NULL
+              AND (channel_profile_ids IS NULL OR channel_profile_ids = '')
+        """)
+        if cursor.rowcount > 0:
+            print(f"  ✅ Migrated {cursor.rowcount} event group(s) to multi-profile format")
+
+        # For managed_channels
+        cursor.execute("""
+            UPDATE managed_channels
+            SET channel_profile_ids = '[' || channel_profile_id || ']'
+            WHERE channel_profile_id IS NOT NULL
+              AND (channel_profile_ids IS NULL OR channel_profile_ids = '')
+        """)
+        if cursor.rowcount > 0:
+            print(f"  ✅ Migrated {cursor.rowcount} managed channel(s) to multi-profile format")
+
+        conn.commit()
+    except Exception as e:
+        print(f"  ⚠️ Could not migrate channel profiles: {e}")
 
     # =========================================================================
     # UPDATE SCHEMA VERSION
@@ -1336,6 +1378,18 @@ def bulk_create_aliases(aliases: List[Dict[str, str]]) -> int:
 # Event EPG Group Functions (for Event Channel EPG)
 # =============================================================================
 
+def _parse_event_group_json_fields(group: Dict[str, Any]) -> Dict[str, Any]:
+    """Parse JSON fields in an event EPG group dict."""
+    if group and 'channel_profile_ids' in group and group['channel_profile_ids']:
+        try:
+            group['channel_profile_ids'] = json.loads(group['channel_profile_ids'])
+        except (json.JSONDecodeError, TypeError):
+            group['channel_profile_ids'] = []
+    elif group:
+        group['channel_profile_ids'] = []
+    return group
+
+
 def get_event_epg_group(group_id: int) -> Optional[Dict[str, Any]]:
     """Get an event EPG group by ID."""
     conn = get_connection()
@@ -1345,17 +1399,18 @@ def get_event_epg_group(group_id: int) -> Optional[Dict[str, Any]]:
             "SELECT * FROM event_epg_groups WHERE id = ?",
             (group_id,)
         ).fetchone()
-        return dict(result) if result else None
+        return _parse_event_group_json_fields(dict(result)) if result else None
     finally:
         conn.close()
 
 
 def get_event_epg_group_by_dispatcharr_id(dispatcharr_group_id: int) -> Optional[Dict[str, Any]]:
     """Get an event EPG group by Dispatcharr group ID."""
-    return db_fetch_one(
+    result = db_fetch_one(
         "SELECT * FROM event_epg_groups WHERE dispatcharr_group_id = ?",
         (dispatcharr_group_id,)
     )
+    return _parse_event_group_json_fields(result) if result else None
 
 
 def get_all_event_epg_groups(enabled_only: bool = False) -> List[Dict[str, Any]]:
@@ -1370,7 +1425,8 @@ def get_all_event_epg_groups(enabled_only: bool = False) -> List[Dict[str, Any]]
     if enabled_only:
         query += " WHERE g.enabled = 1"
     query += " ORDER BY g.group_name"
-    return db_fetch_all(query)
+    groups = db_fetch_all(query)
+    return [_parse_event_group_json_fields(g) for g in groups]
 
 
 def create_event_epg_group(
@@ -1386,9 +1442,7 @@ def create_event_epg_group(
     channel_group_id: int = None,
     channel_group_name: str = None,
     stream_profile_id: int = None,
-    channel_profile_id: int = None,
-    custom_regex: str = None,
-    custom_regex_enabled: bool = False,
+    channel_profile_ids: list = None,
     custom_regex_teams: str = None,
     custom_regex_teams_enabled: bool = False,
     custom_regex_date: str = None,
@@ -1410,9 +1464,7 @@ def create_event_epg_group(
         channel_group_id: Dispatcharr channel group ID to assign created channels to
         channel_group_name: Dispatcharr channel group name (for UI display)
         stream_profile_id: Dispatcharr stream profile ID to assign to created channels
-        channel_profile_id: Dispatcharr channel profile ID to add created channels to
-        custom_regex: Legacy single regex pattern (deprecated)
-        custom_regex_enabled: Legacy flag (deprecated - use individual enables)
+        channel_profile_ids: List of Dispatcharr channel profile IDs to add created channels to
         custom_regex_teams: Combined regex with (?P<team1>...) and (?P<team2>...) groups
         custom_regex_teams_enabled: Enable custom teams regex
         custom_regex_date: Optional regex pattern to extract game date
@@ -1438,28 +1490,29 @@ def create_event_epg_group(
     conn = get_connection()
     try:
         cursor = conn.cursor()
+        # Convert channel_profile_ids list to JSON string
+        channel_profile_ids_json = json.dumps(channel_profile_ids) if channel_profile_ids else None
+
         cursor.execute(
             """
             INSERT INTO event_epg_groups
             (dispatcharr_group_id, dispatcharr_account_id, group_name,
              assigned_league, assigned_sport, enabled,
              event_template_id, account_name, channel_start, channel_group_id,
-             channel_group_name, stream_profile_id, channel_profile_id,
-             custom_regex, custom_regex_enabled,
+             channel_group_name, stream_profile_id, channel_profile_ids,
              custom_regex_teams, custom_regex_teams_enabled,
              custom_regex_date, custom_regex_date_enabled,
              custom_regex_time, custom_regex_time_enabled,
              stream_exclude_regex, stream_exclude_regex_enabled,
              skip_builtin_filter, parent_group_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 dispatcharr_group_id, dispatcharr_account_id, group_name,
                 assigned_league.lower(), assigned_sport.lower(),
                 1 if enabled else 0,
                 event_template_id, account_name, channel_start,
-                channel_group_id, channel_group_name, stream_profile_id, channel_profile_id,
-                custom_regex, 1 if custom_regex_enabled else 0,
+                channel_group_id, channel_group_name, stream_profile_id, channel_profile_ids_json,
                 custom_regex_teams, 1 if custom_regex_teams_enabled else 0,
                 custom_regex_date, 1 if custom_regex_date_enabled else 0,
                 custom_regex_time, 1 if custom_regex_time_enabled else 0,
@@ -1484,6 +1537,12 @@ def update_event_epg_group(group_id: int, data: Dict[str, Any]) -> bool:
             data['assigned_league'] = data['assigned_league'].lower()
         if 'assigned_sport' in data:
             data['assigned_sport'] = data['assigned_sport'].lower()
+
+        # Convert channel_profile_ids list to JSON string
+        if 'channel_profile_ids' in data:
+            if isinstance(data['channel_profile_ids'], list):
+                data['channel_profile_ids'] = json.dumps(data['channel_profile_ids']) if data['channel_profile_ids'] else None
+            # If it's already a string (JSON), leave it as is
 
         # Exclude fields that aren't actual columns
         exclude_fields = {'id', 'group_id'}
@@ -1577,31 +1636,46 @@ def update_event_epg_group_last_refresh(group_id: int) -> bool:
 # Managed Channels Functions (for Channel Lifecycle Management)
 # =============================================================================
 
+def _parse_managed_channel_json_fields(channel: Dict[str, Any]) -> Dict[str, Any]:
+    """Parse JSON fields in a managed channel dict."""
+    if channel and 'channel_profile_ids' in channel and channel['channel_profile_ids']:
+        try:
+            channel['channel_profile_ids'] = json.loads(channel['channel_profile_ids'])
+        except (json.JSONDecodeError, TypeError):
+            channel['channel_profile_ids'] = []
+    elif channel:
+        channel['channel_profile_ids'] = []
+    return channel
+
+
 def get_managed_channel(channel_id: int) -> Optional[Dict[str, Any]]:
     """Get a managed channel by ID."""
-    return db_fetch_one("SELECT * FROM managed_channels WHERE id = ?", (channel_id,))
+    result = db_fetch_one("SELECT * FROM managed_channels WHERE id = ?", (channel_id,))
+    return _parse_managed_channel_json_fields(result) if result else None
 
 
 def get_managed_channel_by_dispatcharr_id(dispatcharr_channel_id: int) -> Optional[Dict[str, Any]]:
     """Get a managed channel by Dispatcharr channel ID."""
-    return db_fetch_one(
+    result = db_fetch_one(
         "SELECT * FROM managed_channels WHERE dispatcharr_channel_id = ?",
         (dispatcharr_channel_id,)
     )
+    return _parse_managed_channel_json_fields(result) if result else None
 
 
 def get_managed_channel_by_event(espn_event_id: str, group_id: int = None) -> Optional[Dict[str, Any]]:
     """Get a managed channel by ESPN event ID, optionally filtered by group."""
     if group_id:
-        return db_fetch_one(
+        result = db_fetch_one(
             "SELECT * FROM managed_channels WHERE espn_event_id = ? AND event_epg_group_id = ? AND deleted_at IS NULL",
             (espn_event_id, group_id)
         )
     else:
-        return db_fetch_one(
+        result = db_fetch_one(
             "SELECT * FROM managed_channels WHERE espn_event_id = ? AND deleted_at IS NULL",
             (espn_event_id,)
         )
+    return _parse_managed_channel_json_fields(result) if result else None
 
 
 def get_managed_channels_for_group(group_id: int, include_deleted: bool = False) -> List[Dict[str, Any]]:
@@ -1610,7 +1684,8 @@ def get_managed_channels_for_group(group_id: int, include_deleted: bool = False)
     if not include_deleted:
         query += " AND deleted_at IS NULL"
     query += " ORDER BY channel_number"
-    return db_fetch_all(query, (group_id,))
+    channels = db_fetch_all(query, (group_id,))
+    return [_parse_managed_channel_json_fields(c) for c in channels]
 
 
 def get_all_managed_channels(include_deleted: bool = False) -> List[Dict[str, Any]]:
@@ -1626,7 +1701,8 @@ def get_all_managed_channels(include_deleted: bool = False) -> List[Dict[str, An
     if not include_deleted:
         query += " WHERE mc.deleted_at IS NULL"
     query += " ORDER BY mc.event_epg_group_id, mc.channel_number"
-    return db_fetch_all(query)
+    channels = db_fetch_all(query)
+    return [_parse_managed_channel_json_fields(c) for c in channels]
 
 
 def get_channels_pending_deletion() -> List[Dict[str, Any]]:
@@ -1635,13 +1711,14 @@ def get_channels_pending_deletion() -> List[Dict[str, Any]]:
     # scheduled_delete_at is stored as ISO8601 with timezone (e.g., 2025-11-28T04:59:59+00:00)
     # CURRENT_TIMESTAMP returns YYYY-MM-DD HH:MM:SS format
     # datetime() normalizes both to comparable format
-    return db_fetch_all("""
+    channels = db_fetch_all("""
         SELECT * FROM managed_channels
         WHERE scheduled_delete_at IS NOT NULL
         AND datetime(scheduled_delete_at) <= datetime('now')
         AND deleted_at IS NULL
         ORDER BY scheduled_delete_at
     """)
+    return [_parse_managed_channel_json_fields(c) for c in channels]
 
 
 def create_managed_channel(
@@ -1657,7 +1734,7 @@ def create_managed_channel(
     away_team: str = None,
     scheduled_delete_at: str = None,
     dispatcharr_logo_id: int = None,
-    channel_profile_id: int = None,
+    channel_profile_ids: list = None,  # List of channel profile IDs
     dispatcharr_uuid: str = None,  # Immutable UUID from Dispatcharr
     # V2 fields
     primary_stream_id: int = None,
@@ -1691,7 +1768,7 @@ def create_managed_channel(
         away_team: Away team name
         scheduled_delete_at: When to delete the channel
         dispatcharr_logo_id: Logo ID in Dispatcharr (for cleanup)
-        channel_profile_id: Channel profile ID (for cleanup)
+        channel_profile_ids: List of channel profile IDs the channel was added to
         primary_stream_id: Stream that created this channel (for 'separate' mode)
         channel_group_id: Dispatcharr channel group ID
         stream_profile_id: Dispatcharr stream profile ID
@@ -1719,17 +1796,20 @@ def create_managed_channel(
 
         # Build column/value lists dynamically to handle schema variations
         # Core columns that always exist
+        # Convert channel_profile_ids list to JSON string
+        channel_profile_ids_json = json.dumps(channel_profile_ids) if channel_profile_ids else None
+
         columns = [
             'event_epg_group_id', 'dispatcharr_channel_id', 'dispatcharr_stream_id',
             'channel_number', 'channel_name', 'tvg_id', 'espn_event_id', 'event_date',
             'home_team', 'away_team', 'scheduled_delete_at', 'dispatcharr_logo_id',
-            'channel_profile_id'
+            'channel_profile_ids'
         ]
         values = [
             event_epg_group_id, dispatcharr_channel_id, dispatcharr_stream_id,
             channel_number, channel_name, tvg_id, espn_event_id, event_date,
             home_team, away_team, scheduled_delete_at, dispatcharr_logo_id,
-            channel_profile_id
+            channel_profile_ids_json
         ]
 
         # Check which optional columns exist in schema

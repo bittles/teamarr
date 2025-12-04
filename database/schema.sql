@@ -241,6 +241,7 @@ CREATE TABLE IF NOT EXISTS settings (
 
     -- Event-based EPG Settings
     include_final_events INTEGER DEFAULT 0,          -- Include completed/final events from today: 0=exclude, 1=include
+    event_lookahead_days INTEGER DEFAULT 7,          -- How many days ahead to look for events (1-30)
 
     -- Time Format Settings
     time_format TEXT DEFAULT '12h',                  -- '12h' or '24h'
@@ -258,7 +259,7 @@ CREATE TABLE IF NOT EXISTS settings (
     default_duplicate_event_handling TEXT DEFAULT 'consolidate',  -- ignore, consolidate, separate
 
     -- Schema versioning for migrations
-    schema_version INTEGER DEFAULT 8,  -- Current schema version (increment with each migration)
+    schema_version INTEGER DEFAULT 11,  -- Current schema version (increment with each migration)
 
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -649,6 +650,9 @@ CREATE TABLE IF NOT EXISTS event_epg_groups (
     channel_delete_timing TEXT DEFAULT 'same_day', -- When to delete: stream_removed, same_day, day_after, 2_days_after, manual
     channel_group_id INTEGER,                      -- Dispatcharr channel group to create channels in
     channel_group_name TEXT,                       -- Dispatcharr channel group name (for UI display)
+    stream_profile_id INTEGER,                     -- Dispatcharr stream profile
+    channel_profile_id INTEGER,                    -- Dispatcharr channel profile (legacy - single)
+    channel_profile_ids TEXT,                      -- Dispatcharr channel profiles (JSON array)
 
     -- Parent/Child Group Relationship
     parent_group_id INTEGER REFERENCES event_epg_groups(id),  -- NULL = parent, set = child
@@ -718,7 +722,8 @@ CREATE TABLE IF NOT EXISTS managed_channels (
     channel_name TEXT NOT NULL,
     channel_group_id INTEGER,                -- Dispatcharr channel group
     stream_profile_id INTEGER,               -- Dispatcharr stream profile
-    channel_profile_id INTEGER,              -- Dispatcharr channel profile
+    channel_profile_id INTEGER,              -- Dispatcharr channel profile (legacy - single)
+    channel_profile_ids TEXT,                -- Dispatcharr channel profiles (JSON array)
     dispatcharr_logo_id INTEGER,
     logo_url TEXT,                           -- Source URL used for logo
 

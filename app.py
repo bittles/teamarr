@@ -312,9 +312,6 @@ def refresh_event_group_core(group, m3u_manager, skip_m3u_refresh=False, epg_sta
         time_enabled = bool(group.get('custom_regex_time_enabled'))
         any_custom_enabled = teams_enabled or date_enabled or time_enabled
 
-        # Legacy support: check old global enable flag
-        use_legacy_regex = bool(group.get('custom_regex_enabled')) and group.get('custom_regex') and not any_custom_enabled
-
         def match_single_stream(stream):
             """Match a single stream to ESPN event - called in parallel"""
             # Create matchers per-thread for thread safety
@@ -333,12 +330,6 @@ def refresh_event_group_core(group, m3u_manager, skip_m3u_refresh=False, epg_sta
                         date_enabled=date_enabled,
                         time_pattern=group.get('custom_regex_time'),
                         time_enabled=time_enabled
-                    )
-                elif use_legacy_regex:
-                    team_result = thread_team_matcher.extract_teams_with_regex(
-                        stream['name'],
-                        group['custom_regex'],
-                        group['assigned_league']
                     )
                 else:
                     team_result = thread_team_matcher.extract_teams(stream['name'], group['assigned_league'])
@@ -2768,27 +2759,30 @@ def serve_epg():
 
 @app.route('/api/parse-espn-url', methods=['POST'])
 def api_parse_espn_url():
-    """Parse ESPN URL and fetch team data"""
+    """Parse ESPN URL and fetch team data
+
+    Supports multiple ESPN URL patterns:
+    - Pro sports: https://www.espn.com/nba/team/_/name/det/detroit-pistons
+    - College sports: https://www.espn.com/college-football/team/_/id/130/michigan-wolverines
+    - Soccer clubs: https://www.espn.com/soccer/club/_/id/21422/angel-city-fc
+    """
     try:
-        url = request.json.get('url', '')
+        url = request.json.get('url', '').strip()
 
-        # Extract team info from URL
-        # ESPN URL format: https://www.espn.com/nba/team/_/name/det/detroit-pistons
-        import re
-        match = re.search(r'espn\.com/([^/]+)/team/_/name/([^/]+)/([^/]+)', url)
+        if not url:
+            return jsonify({'success': False, 'message': 'Please provide an ESPN team URL'})
 
-        if not match:
-            return jsonify({'success': False, 'message': 'Invalid ESPN URL format'})
-
-        league = match.group(1)  # nba, nfl, etc.
-        team_slug = match.group(2)  # det, dal, etc.
-
-        # Fetch team data from ESPN API
+        # Fetch team data from ESPN API (handles URL parsing internally)
         espn_client = ESPNClient()
         team_data = espn_client.get_team_info_from_url(url)
 
         if not team_data:
-            return jsonify({'success': False, 'message': 'Could not fetch team data from ESPN'})
+            return jsonify({
+                'success': False,
+                'message': 'Could not fetch team data. Please verify the URL is a valid ESPN team page '
+                          '(e.g., espn.com/nba/team/_/name/det/detroit-pistons or '
+                          'espn.com/college-football/team/_/id/130/michigan-wolverines)'
+            })
 
         # Fetch default channel ID format from settings and generate suggested channel_id
         conn = get_connection()
@@ -3550,7 +3544,7 @@ def api_event_epg_dispatcharr_streams(group_id):
     If the group is configured in our database, refreshes M3U first.
 
     Query params:
-        limit: Max streams to return (default: 50)
+        limit: Max streams to return (default: no limit)
         match: If 'true', attempt to match teams and find ESPN events
     """
     try:
@@ -3558,7 +3552,7 @@ def api_event_epg_dispatcharr_streams(group_id):
         if not manager:
             return jsonify({'error': 'Dispatcharr credentials not configured'}), 400
 
-        limit = request.args.get('limit', 50, type=int)
+        limit = request.args.get('limit', None, type=int)
         do_match = request.args.get('match', 'false').lower() == 'true'
 
         # Check if group is configured in our database - if so, refresh M3U first
@@ -3710,7 +3704,7 @@ def api_event_epg_dispatcharr_streams_sse(group_id):
     Returns stream data incrementally for real-time UI updates.
 
     Query params:
-        limit: Max streams to process (default: 50)
+        limit: Max streams to process (default: no limit)
         league: League code for team matching
     """
     import threading
@@ -3718,7 +3712,7 @@ def api_event_epg_dispatcharr_streams_sse(group_id):
     from concurrent.futures import ThreadPoolExecutor
 
     # Capture request args NOW, before generator executes (request context gone during streaming)
-    limit = request.args.get('limit', 50, type=int)
+    limit = request.args.get('limit', None, type=int)
     league = request.args.get('league')
 
     def generate():
@@ -3788,6 +3782,12 @@ def api_event_epg_dispatcharr_streams_sse(group_id):
                         except re.error:
                             pass
 
+                    # Check for custom regex configuration (same logic as refresh_event_group_core)
+                    teams_enabled = bool(db_group.get('custom_regex_teams_enabled')) if db_group else False
+                    date_enabled = bool(db_group.get('custom_regex_date_enabled')) if db_group else False
+                    time_enabled = bool(db_group.get('custom_regex_time_enabled')) if db_group else False
+                    any_custom_enabled = teams_enabled or date_enabled or time_enabled
+
                     send_progress('progress', f'Matching {len(streams)} streams...', percent=50)
 
                     def match_single_stream(stream):
@@ -3813,8 +3813,20 @@ def api_event_epg_dispatcharr_streams_sse(group_id):
                                     'filter_reason': get_display_text(FilterReason.EXCLUDE_REGEX_MATCHED)
                                 }
 
-                            # Extract teams
-                            team_result = thread_team_matcher.extract_teams(stream_name, league)
+                            # Extract teams - use custom regex if configured (same logic as refresh_event_group_core)
+                            if any_custom_enabled:
+                                team_result = thread_team_matcher.extract_teams_with_selective_regex(
+                                    stream_name,
+                                    league,
+                                    teams_pattern=db_group.get('custom_regex_teams'),
+                                    teams_enabled=teams_enabled,
+                                    date_pattern=db_group.get('custom_regex_date'),
+                                    date_enabled=date_enabled,
+                                    time_pattern=db_group.get('custom_regex_time'),
+                                    time_enabled=time_enabled
+                                )
+                            else:
+                                team_result = thread_team_matcher.extract_teams(stream_name, league)
 
                             # If teams matched, find ESPN event
                             if team_result.get('matched'):
@@ -3901,12 +3913,27 @@ def api_event_epg_dispatcharr_streams_sse(group_id):
                 # Sort streams alphabetically
                 streams.sort(key=lambda s: s.get('name', '').lower())
 
-                # Send final result
+                # Build custom regex info for UI display
+                custom_regex_info = None
+                if league and db_group:
+                    exclude_enabled = bool(db_group.get('stream_exclude_regex_enabled')) and bool(db_group.get('stream_exclude_regex'))
+                    # Show info if any custom pattern is enabled
+                    if any_custom_enabled or exclude_enabled:
+                        custom_regex_info = {
+                            'teams': teams_enabled,
+                            'date': date_enabled,
+                            'time': time_enabled,
+                            'exclude': exclude_enabled
+                        }
+
+                # Send final result with custom regex indicator
                 send_progress('complete', 'Preview complete', percent=100,
                               group=result['group'],
                               streams=streams,
                               total_streams=result['total_streams'],
-                              filtered_count=filtered_count)
+                              filtered_count=filtered_count,
+                              using_custom_regex=any_custom_enabled if league else False,
+                              custom_regex_info=custom_regex_info)
 
             except Exception as e:
                 app.logger.error(f"Error in preview stream for group {group_id}: {e}")
@@ -4166,6 +4193,52 @@ def api_dispatcharr_channel_profiles():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/dispatcharr/channel-profiles', methods=['POST'])
+def api_dispatcharr_channel_profiles_create():
+    """
+    Create a new channel profile in Dispatcharr.
+
+    Body:
+        name: str (required) - Profile name
+    """
+    from api.dispatcharr_client import ChannelManager
+
+    try:
+        data = request.get_json()
+        name = data.get('name', '').strip() if data else ''
+
+        if not name:
+            return jsonify({'error': 'Profile name is required'}), 400
+
+        conn = get_connection()
+        settings = dict(conn.execute("SELECT * FROM settings WHERE id = 1").fetchone())
+        conn.close()
+
+        if not settings.get('dispatcharr_url'):
+            return jsonify({'error': 'Dispatcharr not configured'}), 400
+
+        channel_mgr = ChannelManager(
+            settings['dispatcharr_url'],
+            settings['dispatcharr_username'],
+            settings['dispatcharr_password']
+        )
+
+        result = channel_mgr.create_channel_profile(name)
+
+        if result.get('success'):
+            return jsonify({
+                'success': True,
+                'profile': result.get('profile'),
+                'profile_id': result.get('profile_id')
+            })
+        else:
+            return jsonify({'error': result.get('error', 'Failed to create profile')}), 400
+
+    except Exception as e:
+        app.logger.error(f"Error creating channel profile: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/event-epg/groups', methods=['GET'])
 def api_event_epg_groups_list():
     """List all event EPG groups configured in Teamarr."""
@@ -4211,6 +4284,7 @@ def api_event_epg_groups_create():
             data['channel_group_name'] = None
             data['stream_profile_id'] = None
             data['channel_profile_id'] = None
+            data['channel_profile_ids'] = None
 
         required = ['dispatcharr_group_id', 'dispatcharr_account_id', 'group_name', 'assigned_league', 'assigned_sport']
         for field in required:
@@ -4252,9 +4326,7 @@ def api_event_epg_groups_create():
             channel_group_id=data.get('channel_group_id'),
             channel_group_name=data.get('channel_group_name'),
             stream_profile_id=data.get('stream_profile_id'),
-            channel_profile_id=data.get('channel_profile_id'),
-            custom_regex=data.get('custom_regex'),
-            custom_regex_enabled=bool(data.get('custom_regex_enabled')),
+            channel_profile_ids=data.get('channel_profile_ids'),
             custom_regex_teams=data.get('custom_regex_teams'),
             custom_regex_teams_enabled=bool(data.get('custom_regex_teams_enabled')),
             custom_regex_date=data.get('custom_regex_date'),
@@ -4506,19 +4578,13 @@ def api_event_epg_test_regex(group_id):
     """
     Test custom regex patterns against streams in a group.
 
-    Request body (separate patterns - preferred):
+    Request body:
         {
-            "team1_pattern": "^([A-Z]{2,3})",
-            "team2_pattern": "@\\s*([A-Z]{2,3})",
+            "teams_pattern": "(?P<team1>\\w+)\\s*@\\s*(?P<team2>\\w+)",  // required
             "date_pattern": "(\\d{1,2}/\\d{1,2})",  // optional
             "time_pattern": "(\\d{1,2}:\\d{2}(?:AM|PM)?)",  // optional
-            "limit": 5  // optional, default 5
-        }
-
-    Request body (legacy single pattern):
-        {
-            "regex": "(?P<team1>\\w+)\\s*@\\s*(?P<team2>\\w+)",
-            "limit": 5
+            "exclude_pattern": "...",  // optional
+            "limit": 5  // optional, default tests all streams
         }
 
     Returns results for each stream showing:
@@ -4535,46 +4601,32 @@ def api_event_epg_test_regex(group_id):
             return jsonify({'error': 'Group not found'}), 404
 
         data = request.get_json() or {}
-        limit = min(data.get('limit', 5), 20)  # Cap at 20
+        limit = data.get('limit')  # None = test all streams
 
-        # Determine which mode we're using
-        teams_pattern = data.get('teams_pattern', '').strip()
-        date_pattern = data.get('date_pattern', '').strip() or None
-        time_pattern = data.get('time_pattern', '').strip() or None
-        legacy_regex = data.get('regex', '').strip()
+        # Handle None values explicitly (can happen if frontend sends null)
+        teams_pattern = (data.get('teams_pattern') or '').strip()
+        date_pattern = (data.get('date_pattern') or '').strip() or None
+        time_pattern = (data.get('time_pattern') or '').strip() or None
+        exclude_pattern = (data.get('exclude_pattern') or '').strip() or None
 
-        use_combined = bool(teams_pattern)
-        use_legacy = bool(legacy_regex) and not use_combined
-
-        if not use_combined and not use_legacy:
+        if not teams_pattern:
             return jsonify({'error': 'teams_pattern is required'}), 400
 
-        # Validate patterns
-        if use_combined:
-            # Combined pattern must have team1 and team2 named groups
-            if '(?P<team1>' not in teams_pattern or '(?P<team2>' not in teams_pattern:
-                return jsonify({
-                    'error': 'teams_pattern must contain named groups: (?P<team1>...) and (?P<team2>...)'
-                }), 400
+        # Validate teams pattern has required named groups
+        if '(?P<team1>' not in teams_pattern or '(?P<team2>' not in teams_pattern:
+            return jsonify({
+                'error': 'teams_pattern must contain named groups: (?P<team1>...) and (?P<team2>...)'
+            }), 400
 
-            # Validate all provided patterns
-            for name, pattern in [('teams_pattern', teams_pattern),
-                                  ('date_pattern', date_pattern), ('time_pattern', time_pattern)]:
-                if pattern:
-                    try:
-                        re.compile(pattern)
-                    except re.error as e:
-                        return jsonify({'error': f'Invalid {name} syntax: {e}'}), 400
-        else:
-            # Legacy validation
-            if '(?P<team1>' not in legacy_regex or '(?P<team2>' not in legacy_regex:
-                return jsonify({
-                    'error': 'Legacy regex must contain named groups: (?P<team1>...) and (?P<team2>...)'
-                }), 400
-            try:
-                re.compile(legacy_regex)
-            except re.error as e:
-                return jsonify({'error': f'Invalid regex syntax: {e}'}), 400
+        # Validate all provided patterns
+        for name, pattern in [('teams_pattern', teams_pattern),
+                              ('date_pattern', date_pattern), ('time_pattern', time_pattern),
+                              ('exclude_pattern', exclude_pattern)]:
+            if pattern:
+                try:
+                    re.compile(pattern)
+                except re.error as e:
+                    return jsonify({'error': f'Invalid {name} syntax: {e}'}), 400
 
         # Get streams for this group from Dispatcharr
         conn = get_connection()
@@ -4588,30 +4640,52 @@ def api_event_epg_test_regex(group_id):
             settings.get('dispatcharr_password', '')
         )
 
-        result = m3u.get_group_streams(group['dispatcharr_group_id'])
-        if not result.get('success'):
-            return jsonify({'error': 'Could not fetch streams from Dispatcharr'}), 500
+        streams = m3u.list_streams(group_id=group['dispatcharr_group_id'])
+        if not streams:
+            return jsonify({'error': 'No streams found for this group'}), 404
 
-        streams = result.get('streams', [])[:limit]
+        if limit:
+            streams = streams[:limit]
+
+        # Compile exclude pattern if provided
+        exclude_regex = None
+        if exclude_pattern:
+            exclude_regex = re.compile(exclude_pattern, re.IGNORECASE)
 
         # Test regex against each stream
         team_matcher = create_matcher()
         league = group['assigned_league']
         results = []
+        excluded_count = 0
 
         for stream in streams:
             stream_name = stream.get('name', '')
 
-            if use_combined:
-                test_result = team_matcher.extract_teams_with_combined_regex(
-                    stream_name, league, teams_pattern, date_pattern, time_pattern
-                )
-            else:
-                test_result = team_matcher.extract_teams_with_regex(stream_name, legacy_regex, league)
+            # Check exclusion pattern first
+            if exclude_regex and exclude_regex.search(stream_name):
+                results.append({
+                    'stream_name': stream_name,
+                    'matched': False,
+                    'excluded': True,
+                    'raw_team1': None,
+                    'raw_team2': None,
+                    'resolved_team1': None,
+                    'resolved_team2': None,
+                    'game_date': None,
+                    'game_time': None,
+                    'error': 'Excluded by exclusion pattern'
+                })
+                excluded_count += 1
+                continue
+
+            test_result = team_matcher.extract_teams_with_combined_regex(
+                stream_name, league, teams_pattern, date_pattern, time_pattern
+            )
 
             results.append({
                 'stream_name': stream_name,
                 'matched': test_result['matched'],
+                'excluded': False,
                 'raw_team1': test_result.get('raw_away'),
                 'raw_team2': test_result.get('raw_home'),
                 'resolved_team1': test_result.get('away_team_name'),
@@ -4626,10 +4700,10 @@ def api_event_epg_test_regex(group_id):
 
         return jsonify({
             'success': True,
-            'mode': 'combined' if use_combined else 'legacy',
             'league': league,
             'tested': len(results),
             'matched': matched_count,
+            'excluded': excluded_count,
             'results': results
         })
 
@@ -5732,6 +5806,9 @@ def api_find_orphan_channels():
         all_channels = channel_api.get_channels()
 
         # Find orphans
+        # If no active managed channels exist, ALL teamarr-event channels are orphans
+        no_active_channels = len(known_channel_ids) == 0 and len(known_uuids) == 0
+
         orphans = []
         for ch in all_channels:
             tvg_id = ch.get('tvg_id') or ''
@@ -5741,11 +5818,15 @@ def api_find_orphan_channels():
             ch_id = ch.get('id')
             ch_uuid = ch.get('uuid')
 
-            # Check if we know this channel
-            is_known_by_uuid = ch_uuid and ch_uuid in known_uuids
-            is_known_by_id = ch_id in known_channel_ids
+            # If no active channels, all teamarr-event channels are orphans
+            # Otherwise, check if we know this channel
+            is_orphan = no_active_channels
+            if not is_orphan:
+                is_known_by_uuid = ch_uuid and ch_uuid in known_uuids
+                is_known_by_id = ch_id in known_channel_ids
+                is_orphan = not is_known_by_uuid and not is_known_by_id
 
-            if not is_known_by_uuid and not is_known_by_id:
+            if is_orphan:
                 # Extract event ID from tvg_id
                 event_id = tvg_id.replace('teamarr-event-', '')
                 orphans.append({
@@ -5871,6 +5952,155 @@ def api_cleanup_orphan_channels():
 
     except Exception as e:
         app.logger.error(f"Error cleaning up orphan channels: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/channel-lifecycle/reset', methods=['GET'])
+def api_channel_lifecycle_reset_preview():
+    """
+    Preview all Teamarr-created channels that would be deleted by reset.
+
+    Returns list of all channels with teamarr-event-* tvg_id, regardless
+    of whether they're tracked in managed_channels.
+    """
+    try:
+        from database import get_connection
+        from api.dispatcharr_client import ChannelManager
+
+        conn = get_connection()
+        settings = dict(conn.execute("SELECT * FROM settings WHERE id = 1").fetchone())
+        conn.close()
+
+        if not settings.get('dispatcharr_enabled'):
+            return jsonify({'error': 'Dispatcharr not configured'}), 400
+
+        channel_api = ChannelManager(
+            settings['dispatcharr_url'],
+            settings['dispatcharr_username'],
+            settings['dispatcharr_password']
+        )
+        all_channels = channel_api.get_channels()
+
+        # Find ALL teamarr-event channels
+        teamarr_channels = []
+        for ch in all_channels:
+            tvg_id = ch.get('tvg_id') or ''
+            if tvg_id.startswith('teamarr-event-'):
+                event_id = tvg_id.replace('teamarr-event-', '')
+                teamarr_channels.append({
+                    'dispatcharr_channel_id': ch.get('id'),
+                    'uuid': ch.get('uuid'),
+                    'tvg_id': tvg_id,
+                    'channel_name': ch.get('name'),
+                    'channel_number': ch.get('channel_number'),
+                    'espn_event_id': event_id,
+                    'stream_count': len(ch.get('streams', []))
+                })
+
+        return jsonify({
+            'success': True,
+            'channel_count': len(teamarr_channels),
+            'channels': teamarr_channels
+        })
+
+    except Exception as e:
+        app.logger.error(f"Error previewing reset channels: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/channel-lifecycle/reset', methods=['POST'])
+def api_channel_lifecycle_reset():
+    """
+    Delete ALL Teamarr-created channels from Dispatcharr.
+
+    This is a destructive operation that removes all channels with
+    teamarr-event-* tvg_id, regardless of tracking state. Use this
+    to clean up after issues or start fresh.
+
+    Also clears the managed_channels table (marks all as deleted).
+    """
+    try:
+        from database import get_connection
+        from api.dispatcharr_client import ChannelManager
+
+        conn = get_connection()
+        settings = dict(conn.execute("SELECT * FROM settings WHERE id = 1").fetchone())
+
+        if not settings.get('dispatcharr_enabled'):
+            conn.close()
+            return jsonify({'error': 'Dispatcharr not configured'}), 400
+
+        channel_api = ChannelManager(
+            settings['dispatcharr_url'],
+            settings['dispatcharr_username'],
+            settings['dispatcharr_password']
+        )
+        all_channels = channel_api.get_channels()
+
+        # Find and delete ALL teamarr-event channels
+        deleted = []
+        errors = []
+
+        for ch in all_channels:
+            tvg_id = ch.get('tvg_id') or ''
+            if not tvg_id.startswith('teamarr-event-'):
+                continue
+
+            ch_id = ch.get('id')
+
+            try:
+                result = channel_api.delete_channel(ch_id)
+                if result.get('success'):
+                    deleted.append({
+                        'channel_id': ch_id,
+                        'channel_name': ch.get('name'),
+                        'channel_number': ch.get('channel_number'),
+                        'tvg_id': tvg_id
+                    })
+                    app.logger.info(f"Reset: deleted channel {ch.get('name')} ({tvg_id})")
+                else:
+                    errors.append({
+                        'channel_id': ch_id,
+                        'channel_name': ch.get('name'),
+                        'error': result.get('error', 'Unknown error')
+                    })
+            except Exception as e:
+                errors.append({
+                    'channel_id': ch_id,
+                    'channel_name': ch.get('name'),
+                    'error': str(e)
+                })
+
+        # Mark all managed_channels as deleted
+        deleted_db_count = 0
+        try:
+            cursor = conn.execute("""
+                UPDATE managed_channels
+                SET deleted_at = CURRENT_TIMESTAMP,
+                    sync_status = 'reset',
+                    delete_reason = 'Manual reset - all channels deleted'
+                WHERE deleted_at IS NULL
+            """)
+            deleted_db_count = cursor.rowcount
+            conn.commit()
+        except Exception as e:
+            app.logger.warning(f"Failed to update managed_channels during reset: {e}")
+
+        conn.close()
+
+        app.logger.info(f"Channel reset complete: {len(deleted)} deleted from Dispatcharr, {deleted_db_count} marked in DB")
+
+        return jsonify({
+            'success': True,
+            'deleted_count': len(deleted),
+            'deleted': deleted,
+            'db_records_updated': deleted_db_count,
+            'error_count': len(errors),
+            'errors': errors
+        })
+
+    except Exception as e:
+        app.logger.error(f"Error resetting channels: {e}")
         return jsonify({'error': str(e)}), 500
 
 

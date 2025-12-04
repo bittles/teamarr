@@ -13,6 +13,9 @@
             <button onclick="findOrphanChannels()" class="btn btn-secondary" id="btn-find-orphans" title="Find channels in Dispatcharr that aren't tracked">
                 🔍 Find Orphans
             </button>
+            <button onclick="openResetModal()" class="btn btn-danger" id="btn-reset-all" title="Delete ALL Teamarr channels from Dispatcharr">
+                ⚠️ Reset All
+            </button>
             <button onclick="refreshChannelsList()" class="btn btn-secondary" id="btn-refresh">
                 🔄 Refresh
             </button>
@@ -361,6 +364,142 @@
         </div>
     </div>
 </div>
+
+<!-- Reset All Channels Modal -->
+<div id="reset-modal" class="modal-overlay" onclick="closeResetModal(event)">
+    <div class="modal-content" onclick="event.stopPropagation()">
+        <div class="modal-header">
+            <h2>Reset All Teamarr Channels</h2>
+            <button class="modal-close" onclick="closeResetModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div id="reset-loading" class="loading-state">
+                <div class="spinner"></div>
+                <span>Scanning Dispatcharr...</span>
+            </div>
+            <div id="reset-content" style="display: none;">
+                <div class="reset-warning">
+                    <div class="warning-icon">⚠️</div>
+                    <div class="warning-text">
+                        <strong>Warning: Destructive Action</strong>
+                        <p>This will permanently delete ALL channels in Dispatcharr that were created by Teamarr (channels with <code>teamarr-event-*</code> tvg_id).</p>
+                        <p>This includes both tracked and untracked channels. Use this to clean up after issues or start fresh.</p>
+                    </div>
+                </div>
+                <div id="reset-summary" class="reset-summary">
+                    <div class="reset-count">
+                        <span class="count-number" id="reset-count-display">0</span>
+                        <span class="count-label">channel(s) will be deleted</span>
+                    </div>
+                </div>
+                <div id="reset-channel-list" class="reset-channel-list"></div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeResetModal()">Cancel</button>
+            <button class="btn btn-danger" onclick="executeReset()" id="btn-execute-reset" disabled>
+                🗑️ Delete All Channels
+            </button>
+        </div>
+    </div>
+</div>
+
+<style>
+.reset-warning {
+    display: flex;
+    gap: 1rem;
+    background: rgba(239, 68, 68, 0.1);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    border-radius: 8px;
+    padding: 1rem;
+    margin-bottom: 1rem;
+}
+
+.reset-warning .warning-icon {
+    font-size: 2rem;
+    flex-shrink: 0;
+}
+
+.reset-warning .warning-text strong {
+    display: block;
+    color: #ef4444;
+    margin-bottom: 0.5rem;
+}
+
+.reset-warning .warning-text p {
+    margin: 0.25rem 0;
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+}
+
+.reset-summary {
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem;
+    margin-bottom: 1rem;
+    text-align: center;
+}
+
+.reset-count .count-number {
+    font-size: 2rem;
+    font-weight: 700;
+    color: #ef4444;
+}
+
+.reset-count .count-label {
+    display: block;
+    color: var(--text-muted);
+    font-size: 0.9rem;
+}
+
+.reset-channel-list {
+    max-height: 200px;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 0.85rem;
+}
+
+.reset-channel-item {
+    display: flex;
+    justify-content: space-between;
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid var(--border);
+}
+
+.reset-channel-item:last-child {
+    border-bottom: none;
+}
+
+.reset-channel-item .channel-info {
+    display: flex;
+    gap: 1rem;
+    align-items: center;
+}
+
+.reset-channel-item .channel-number {
+    font-weight: 600;
+    color: var(--text-muted);
+    min-width: 50px;
+}
+
+.reset-channel-item .stream-count {
+    color: var(--text-muted);
+    font-size: 0.8rem;
+}
+
+.reset-empty {
+    padding: 2rem;
+    text-align: center;
+    color: var(--text-muted);
+}
+
+.reset-empty .icon {
+    font-size: 2rem;
+    margin-bottom: 0.5rem;
+}
+</style>
 
 <script>
 // Shift-click support
@@ -976,6 +1115,126 @@ async function cleanupAllOrphans() {
 function closeOrphanModal(event) {
     if (event && event.target !== event.currentTarget) return;
     document.getElementById('orphan-modal').classList.remove('active');
+}
+
+// ============================================================================
+// Reset All Channels
+// ============================================================================
+
+let resetChannels = [];
+
+async function openResetModal() {
+    const modal = document.getElementById('reset-modal');
+    const loadingEl = document.getElementById('reset-loading');
+    const contentEl = document.getElementById('reset-content');
+    const listEl = document.getElementById('reset-channel-list');
+    const executeBtn = document.getElementById('btn-execute-reset');
+
+    loadingEl.style.display = 'flex';
+    contentEl.style.display = 'none';
+    executeBtn.disabled = true;
+    modal.classList.add('active');
+
+    try {
+        const response = await fetch('/api/channel-lifecycle/reset');
+        const data = await response.json();
+
+        if (!response.ok) {
+            throw new Error(data.error || 'Failed to scan channels');
+        }
+
+        resetChannels = data.channels || [];
+        const channelCount = resetChannels.length;
+
+        document.getElementById('reset-count-display').textContent = channelCount;
+
+        if (channelCount > 0) {
+            executeBtn.disabled = false;
+            // Sort by channel number
+            resetChannels.sort((a, b) => (a.channel_number || 0) - (b.channel_number || 0));
+
+            let listHtml = '';
+            resetChannels.forEach(ch => {
+                const streamText = ch.stream_count === 1 ? '1 stream' : `${ch.stream_count} streams`;
+                listHtml += `
+                    <div class="reset-channel-item">
+                        <div class="channel-info">
+                            <span class="channel-number">Ch ${Math.floor(ch.channel_number) || '?'}</span>
+                            <span class="channel-name">${escapeHtml(ch.channel_name || 'Unknown')}</span>
+                        </div>
+                        <span class="stream-count">${streamText}</span>
+                    </div>
+                `;
+            });
+            listEl.innerHTML = listHtml;
+        } else {
+            listEl.innerHTML = `
+                <div class="reset-empty">
+                    <div class="icon">✅</div>
+                    <p>No Teamarr channels found in Dispatcharr</p>
+                </div>
+            `;
+        }
+
+        loadingEl.style.display = 'none';
+        contentEl.style.display = 'block';
+
+    } catch (error) {
+        loadingEl.style.display = 'none';
+        contentEl.style.display = 'block';
+        listEl.innerHTML = `<p class="text-danger" style="padding: 1rem;">Error: ${escapeHtml(error.message)}</p>`;
+    }
+}
+
+async function executeReset() {
+    const count = resetChannels.length;
+    if (count === 0) return;
+
+    // Extra confirmation for destructive action
+    const confirmation = prompt(`This will delete ${count} channel(s). Type "DELETE" to confirm:`);
+    if (confirmation !== 'DELETE') {
+        showNotification('Reset cancelled', 'info');
+        return;
+    }
+
+    const btn = document.getElementById('btn-execute-reset');
+    btn.disabled = true;
+    btn.innerHTML = '🔄 Deleting...';
+
+    try {
+        const response = await fetch('/api/channel-lifecycle/reset', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
+        const data = await response.json();
+
+        if (response.ok) {
+            const deleted = data.deleted_count || 0;
+            const errors = data.error_count || 0;
+            const dbUpdated = data.db_records_updated || 0;
+
+            if (errors > 0) {
+                showNotification(`Deleted ${deleted} channel(s), ${errors} error(s)`, 'warning');
+            } else {
+                showNotification(`Reset complete: ${deleted} channel(s) deleted`, 'success');
+            }
+
+            closeResetModal();
+            refreshChannelsList();
+        } else {
+            showNotification(`Error: ${data.error || 'Reset failed'}`, 'error');
+        }
+    } catch (error) {
+        showNotification(`Error: ${error.message}`, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = '🗑️ Delete All Channels';
+    }
+}
+
+function closeResetModal(event) {
+    if (event && event.target !== event.currentTarget) return;
+    document.getElementById('reset-modal').classList.remove('active');
 }
 
 // ============================================================================

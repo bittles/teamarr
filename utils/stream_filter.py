@@ -13,9 +13,9 @@ import re
 from typing import Dict, List, Tuple
 
 # Pattern to detect game indicators in stream names
-# Matches: vs, vs., at (as word), v (as word), @
+# Matches: vs, vs., at (as word), v (as word), x (as word), @
 GAME_INDICATOR_PATTERN = re.compile(
-    r'\b(vs\.?|at|v)\b|@',
+    r'\b(vs\.?|at|v|x)\b|@',
     re.IGNORECASE
 )
 
@@ -29,6 +29,7 @@ def has_game_indicator(stream_name: str) -> bool:
     - "@" (e.g., "Chiefs @ Ravens")
     - "at" as a word (e.g., "Patriots at Bills")
     - "v" as a word (e.g., "Arsenal v Chelsea" - soccer style)
+    - "x" as a word (e.g., "76ers x Wizards" - some providers use this)
 
     Args:
         stream_name: The stream name to check

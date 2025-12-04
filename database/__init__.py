@@ -153,9 +153,11 @@ def db_insert(query: str, params: tuple = ()) -> int:
 #   6: Managed channels enhancements (logo tracking)
 #   7: Data fixes (NCAA logos, per-group timing cleanup)
 #   8: Channel Lifecycle V2 (multi-stream, history, reconciliation, parent groups)
+#   9-11: Various enhancements (see schema.sql comments)
+#   12: Soccer multi-league cache tables (with league_tags JSON array)
 # =============================================================================
 
-CURRENT_SCHEMA_VERSION = 11
+CURRENT_SCHEMA_VERSION = 12
 
 
 def get_schema_version(conn) -> int:
@@ -734,6 +736,117 @@ def run_migrations(conn):
         conn.commit()
     except Exception as e:
         print(f"  ⚠️ Could not migrate channel profiles: {e}")
+
+    # =========================================================================
+    # 12. SOCCER MULTI-LEAGUE CACHE TABLES
+    # =========================================================================
+    if current_version < 12:
+        print("  🔄 Running migration 12: Soccer multi-league cache tables...")
+
+        # 12a. soccer_team_leagues table
+        if not table_exists("soccer_team_leagues"):
+            try:
+                cursor.execute("""
+                    CREATE TABLE soccer_team_leagues (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        espn_team_id TEXT NOT NULL,
+                        league_slug TEXT NOT NULL,
+                        team_name TEXT,
+                        team_type TEXT,
+                        default_league TEXT,
+                        last_seen TEXT,
+                        UNIQUE(espn_team_id, league_slug)
+                    )
+                """)
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_stl_team ON soccer_team_leagues(espn_team_id)")
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_stl_league ON soccer_team_leagues(league_slug)")
+                migrations_run += 1
+                print("    ✅ Created table: soccer_team_leagues")
+            except Exception as e:
+                print(f"    ⚠️ Could not create soccer_team_leagues table: {e}")
+            conn.commit()
+
+        # 12b. soccer_leagues_cache table
+        if not table_exists("soccer_leagues_cache"):
+            try:
+                cursor.execute("""
+                    CREATE TABLE soccer_leagues_cache (
+                        league_slug TEXT PRIMARY KEY,
+                        league_name TEXT,
+                        league_abbrev TEXT,
+                        league_tags TEXT,
+                        league_logo_url TEXT,
+                        team_count INTEGER,
+                        last_seen TEXT
+                    )
+                """)
+                migrations_run += 1
+                print("    ✅ Created table: soccer_leagues_cache")
+            except Exception as e:
+                print(f"    ⚠️ Could not create soccer_leagues_cache table: {e}")
+            conn.commit()
+
+    # 12b-fix. Rename league_category to league_tags if old column exists (dev migration)
+    # This handles dev databases that ran migration 12 before the tags refactor
+    # Runs ALWAYS (outside version check) to fix dev databases
+    if table_exists("soccer_leagues_cache"):
+        try:
+            cursor.execute("PRAGMA table_info(soccer_leagues_cache)")
+            columns = {row[1] for row in cursor.fetchall()}
+            if 'league_category' in columns and 'league_tags' not in columns:
+                # SQLite doesn't support RENAME COLUMN in older versions, recreate table
+                cursor.execute("""
+                    CREATE TABLE soccer_leagues_cache_new (
+                        league_slug TEXT PRIMARY KEY,
+                        league_name TEXT,
+                        league_abbrev TEXT,
+                        league_tags TEXT,
+                        league_logo_url TEXT,
+                        team_count INTEGER,
+                        last_seen TEXT
+                    )
+                """)
+                cursor.execute("""
+                    INSERT INTO soccer_leagues_cache_new
+                    SELECT league_slug, league_name, league_abbrev, league_category, league_logo_url, team_count, last_seen
+                    FROM soccer_leagues_cache
+                """)
+                cursor.execute("DROP TABLE soccer_leagues_cache")
+                cursor.execute("ALTER TABLE soccer_leagues_cache_new RENAME TO soccer_leagues_cache")
+                conn.commit()
+                print("  ✅ Renamed league_category to league_tags (dev migration)")
+        except Exception as e:
+            print(f"  ⚠️ Could not rename league_category column: {e}")
+
+    # =========================================================================
+    # 12. SOCCER MULTI-LEAGUE CACHE TABLES (continued)
+    # =========================================================================
+    if current_version < 12:
+        # 12c. soccer_cache_meta table
+        if not table_exists("soccer_cache_meta"):
+            try:
+                cursor.execute("""
+                    CREATE TABLE soccer_cache_meta (
+                        id INTEGER PRIMARY KEY CHECK (id = 1),
+                        last_full_refresh TEXT,
+                        leagues_processed INTEGER,
+                        teams_indexed INTEGER,
+                        refresh_duration_seconds REAL,
+                        next_scheduled_refresh TEXT
+                    )
+                """)
+                cursor.execute("INSERT OR IGNORE INTO soccer_cache_meta (id) VALUES (1)")
+                migrations_run += 1
+                print("    ✅ Created table: soccer_cache_meta")
+            except Exception as e:
+                print(f"    ⚠️ Could not create soccer_cache_meta table: {e}")
+            conn.commit()
+
+        # 12d. Settings column for cache frequency
+        add_columns_if_missing("settings", [
+            ("soccer_cache_refresh_frequency", "TEXT DEFAULT 'weekly'"),
+        ])
 
     # =========================================================================
     # UPDATE SCHEMA VERSION

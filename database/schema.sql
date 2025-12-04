@@ -258,8 +258,11 @@ CREATE TABLE IF NOT EXISTS settings (
     -- Default Settings for New Groups
     default_duplicate_event_handling TEXT DEFAULT 'consolidate',  -- ignore, consolidate, separate
 
+    -- Soccer Multi-League Settings
+    soccer_cache_refresh_frequency TEXT DEFAULT 'weekly',  -- daily, every_3_days, weekly, manual
+
     -- Schema versioning for migrations
-    schema_version INTEGER DEFAULT 11,  -- Current schema version (increment with each migration)
+    schema_version INTEGER DEFAULT 12,  -- Current schema version (increment with each migration)
 
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -839,6 +842,65 @@ CREATE TABLE IF NOT EXISTS managed_channel_history (
 CREATE INDEX IF NOT EXISTS idx_mch_channel ON managed_channel_history(managed_channel_id, changed_at DESC);
 CREATE INDEX IF NOT EXISTS idx_mch_time ON managed_channel_history(changed_at DESC);
 CREATE INDEX IF NOT EXISTS idx_mch_type ON managed_channel_history(change_type);
+
+-- =============================================================================
+-- SOCCER TEAM LEAGUES CACHE
+-- Weekly cache mapping team_id → leagues they play in
+-- Enables multi-competition EPG for soccer teams
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS soccer_team_leagues (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    -- Team-League Mapping
+    espn_team_id TEXT NOT NULL,              -- "364" for Liverpool
+    league_slug TEXT NOT NULL,               -- "eng.1", "uefa.champions"
+
+    -- Team Metadata (stable, rarely changes)
+    team_name TEXT,                          -- "Liverpool"
+    team_type TEXT,                          -- "club" or "national"
+    -- Note: default_league is NOT stored - fetched on-demand via get_team_default_league()
+
+    -- Cache Metadata
+    last_seen TEXT,                          -- ISO datetime when last seen in this league
+
+    UNIQUE(espn_team_id, league_slug)
+);
+
+CREATE INDEX IF NOT EXISTS idx_stl_team ON soccer_team_leagues(espn_team_id);
+CREATE INDEX IF NOT EXISTS idx_stl_league ON soccer_team_leagues(league_slug);
+
+-- =============================================================================
+-- SOCCER LEAGUES CACHE
+-- Metadata about each league (slug → name, category, logo)
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS soccer_leagues_cache (
+    league_slug TEXT PRIMARY KEY,            -- "eng.1", "uefa.champions"
+    league_name TEXT,                        -- "English Premier League"
+    league_abbrev TEXT,                      -- "EPL"
+    league_tags TEXT,                        -- JSON array: ["domestic", "club", "league", "mens"]
+    league_logo_url TEXT,                    -- URL to league logo
+    team_count INTEGER,                      -- Number of teams in league
+    last_seen TEXT                           -- ISO datetime
+);
+
+-- =============================================================================
+-- SOCCER CACHE METADATA
+-- Tracks cache refresh status (single row)
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS soccer_cache_meta (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    last_full_refresh TEXT,                  -- ISO datetime of last refresh
+    leagues_processed INTEGER,               -- 244
+    teams_indexed INTEGER,                   -- 3413
+    refresh_duration_seconds REAL,           -- 4.9
+    next_scheduled_refresh TEXT              -- ISO datetime of next scheduled
+);
+
+INSERT OR IGNORE INTO soccer_cache_meta (id) VALUES (1);
 
 -- =============================================================================
 -- END OF SCHEMA

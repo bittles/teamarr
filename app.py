@@ -1304,6 +1304,29 @@ def get_last_epg_generation_time():
         return None
 
 
+def _check_soccer_cache_refresh(settings: dict):
+    """
+    Check if soccer cache needs refresh based on settings.
+    Called from scheduler loop once per day.
+    """
+    from epg.soccer_multi_league import SoccerMultiLeague
+
+    frequency = settings.get('soccer_cache_refresh_frequency', 'weekly')
+
+    # Map frequency to max age in days
+    frequency_days = {
+        'daily': 1,
+        'every_3_days': 3,
+        'weekly': 7,
+        'manual': 9999  # Never auto-refresh
+    }
+
+    max_age = frequency_days.get(frequency, 7)
+
+    if SoccerMultiLeague.refresh_if_needed(max_age):
+        app.logger.info("⚽ Soccer league cache refreshed by scheduler")
+
+
 def scheduler_loop():
     """Background thread that runs the scheduler"""
     global scheduler_running, last_run_time
@@ -1391,6 +1414,14 @@ def scheduler_loop():
             if should_run:
                 run_scheduled_generation()
                 last_run_time = now
+
+            # Check soccer cache refresh once per day at midnight UTC
+            # This is separate from EPG generation frequency
+            if now.hour == 0 and now.minute < 1:  # First minute of the day
+                try:
+                    _check_soccer_cache_refresh(settings)
+                except Exception as e:
+                    app.logger.warning(f"Soccer cache check failed: {e}")
 
             time.sleep(30)  # Check every 30 seconds
 
@@ -2350,7 +2381,8 @@ def settings_update():
             'dispatcharr_enabled', 'dispatcharr_url', 'dispatcharr_username',
             'dispatcharr_password', 'dispatcharr_epg_id',
             'channel_create_timing', 'channel_delete_timing', 'include_final_events',
-            'event_lookahead_days', 'default_duplicate_event_handling'
+            'event_lookahead_days', 'default_duplicate_event_handling',
+            'soccer_cache_refresh_frequency'
         ]
 
         for field in fields:
@@ -3444,6 +3476,97 @@ def api_teams_bulk_import():
     except Exception as e:
         app.logger.error(f"Bulk import failed: {e}")
         return jsonify({'error': str(e)}), 500
+
+# =============================================================================
+# SOCCER MULTI-LEAGUE CACHE API ENDPOINTS
+# =============================================================================
+
+@app.route('/api/soccer/cache/status', methods=['GET'])
+def api_soccer_cache_status():
+    """Get soccer multi-league cache status and statistics."""
+    from epg.soccer_multi_league import SoccerMultiLeague
+
+    try:
+        stats = SoccerMultiLeague.get_cache_stats()
+        return jsonify({
+            'success': True,
+            'last_refresh': stats.last_refresh.isoformat() if stats.last_refresh else None,
+            'leagues_processed': stats.leagues_processed,
+            'teams_indexed': stats.teams_indexed,
+            'refresh_duration_seconds': stats.refresh_duration,
+            'is_stale': stats.is_stale,
+            'staleness_days': stats.staleness_days,
+            'is_empty': SoccerMultiLeague.is_cache_empty()
+        })
+    except Exception as e:
+        app.logger.error(f"Error getting soccer cache status: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/soccer/cache/refresh', methods=['POST'])
+def api_soccer_cache_refresh():
+    """Manually trigger soccer multi-league cache refresh."""
+    from epg.soccer_multi_league import SoccerMultiLeague
+
+    try:
+        result = SoccerMultiLeague.refresh_cache()
+        return jsonify(result)
+    except Exception as e:
+        app.logger.error(f"Error refreshing soccer cache: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/soccer/team/<team_id>/leagues', methods=['GET'])
+def api_soccer_team_leagues(team_id):
+    """Get all leagues for a soccer team from the cache."""
+    from epg.soccer_multi_league import SoccerMultiLeague
+
+    try:
+        info = SoccerMultiLeague.get_team_info(team_id)
+        if not info:
+            return jsonify({'error': 'Team not found in soccer cache'}), 404
+
+        # Get full league info for each
+        leagues_info = []
+        for slug in info.leagues:
+            league = SoccerMultiLeague.get_league_info(slug)
+            if league:
+                leagues_info.append({
+                    'slug': league.slug,
+                    'name': league.name,
+                    'abbrev': league.abbrev,
+                    'tags': league.tags,
+                    'category': league.category,  # Legacy
+                    'logo_url': league.logo_url
+                })
+            else:
+                leagues_info.append({
+                    'slug': slug,
+                    'name': slug,
+                    'abbrev': '',
+                    'tags': [],
+                    'category': 'unknown',
+                    'logo_url': ''
+                })
+
+        # Fetch authoritative default league from ESPN (not cached)
+        default_league = None
+        if info.leagues:
+            default_league = SoccerMultiLeague.get_team_default_league(team_id, info.leagues[0])
+
+        return jsonify({
+            'success': True,
+            'team_id': info.team_id,
+            'team_name': info.team_name,
+            'team_type': info.team_type,
+            'default_league': default_league,
+            'leagues': leagues_info,
+            'league_count': len(leagues_info)
+        })
+    except Exception as e:
+        app.logger.error(f"Error getting soccer team leagues: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 
 # =============================================================================
 # EVENT EPG API ENDPOINTS
@@ -6430,6 +6553,37 @@ def sync_timezone_from_env():
         except Exception as e:
             app.logger.warning(f"⚠️ Could not check/set default timezone: {e}")
 
+
+def initialize_soccer_cache():
+    """
+    Initialize soccer multi-league cache on startup.
+    Builds cache if empty, logs migration summary for existing teams.
+    """
+    from epg.soccer_multi_league import SoccerMultiLeague
+    from epg.league_config import is_soccer_league
+
+    try:
+        # Check if cache is empty
+        if SoccerMultiLeague.is_cache_empty():
+            app.logger.info("⚽ Soccer league cache is empty, building initial cache...")
+            result = SoccerMultiLeague.refresh_cache()
+
+            if result['success']:
+                app.logger.info(f"✅ Soccer cache built: {result['teams_indexed']} teams across {result['leagues_processed']} leagues ({result['duration_seconds']:.1f}s)")
+            else:
+                app.logger.warning(f"⚠️ Soccer cache build failed: {result.get('error', 'Unknown error')}")
+        else:
+            # Cache exists - log status
+            stats = SoccerMultiLeague.get_cache_stats()
+            if stats.is_stale:
+                app.logger.info(f"⚽ Soccer cache is {stats.staleness_days} days old (will refresh per schedule)")
+            else:
+                app.logger.info(f"⚽ Soccer cache ready: {stats.teams_indexed} teams, {stats.leagues_processed} leagues")
+
+    except Exception as e:
+        app.logger.warning(f"⚠️ Soccer cache initialization skipped: {e}")
+
+
 # =============================================================================
 # RUN APPLICATION
 # =============================================================================
@@ -6437,6 +6591,9 @@ def sync_timezone_from_env():
 if __name__ == '__main__':
     # Sync timezone from environment variable (Docker)
     sync_timezone_from_env()
+
+    # Initialize soccer multi-league cache (runs in background if empty)
+    initialize_soccer_cache()
 
     # Start the auto-generation scheduler
     # Only start in main process, not in werkzeug reloader process

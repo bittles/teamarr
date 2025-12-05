@@ -737,11 +737,14 @@ class ChannelLifecycleManager:
 
             # Check channel name - resolve from template and compare
             if event and template and template_engine:
+                # Get exception_keyword from existing channel for proper name resolution
+                channel_exception_keyword = existing.get('exception_keyword')
                 new_channel_name = generate_channel_name(
                     event,
                     template=template,
                     template_engine=template_engine,
-                    timezone=self.timezone
+                    timezone=self.timezone,
+                    exception_keyword=channel_exception_keyword
                 )
                 current_dispatcharr_name = current_channel.get('name', '')
 

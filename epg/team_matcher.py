@@ -13,6 +13,7 @@ Key Features:
 """
 
 import re
+import threading
 from datetime import datetime, timedelta
 from typing import Optional, Dict, List, Any, Tuple
 
@@ -21,6 +22,12 @@ from utils.logger import get_logger
 from utils.regex_helper import REGEX_MODULE
 
 logger = get_logger(__name__)
+
+
+# Module-level shared cache for team data across all TeamMatcher instances
+# This prevents redundant ESPN API calls when processing streams in parallel
+_shared_team_cache: Dict[str, Dict] = {}
+_shared_team_cache_lock = threading.Lock()
 
 
 def extract_date_from_text(text: str) -> Optional[datetime]:
@@ -213,14 +220,14 @@ class TeamMatcher:
             espn_client: ESPNClient instance for fetching team data
             db_connection_func: Function that returns a database connection
                                (for alias lookups). If None, aliases won't be used.
+
+        Note: Team data is cached at the module level (shared across all instances)
+        to prevent redundant ESPN API calls when processing streams in parallel.
         """
         self.espn = espn_client
         self.db_connection_func = db_connection_func
 
-        # Cache: {league_code: {'teams': [...], 'fetched_at': datetime}}
-        self._team_cache: Dict[str, Dict] = {}
-
-        # League config cache (from database)
+        # League config cache (from database) - per instance since config is fast to fetch
         self._league_config: Dict[str, Dict] = {}
 
     def _get_league_config(self, league_code: str) -> Optional[Dict]:
@@ -237,8 +244,10 @@ class TeamMatcher:
 
     def _get_teams_for_league(self, league_code: str) -> List[Dict]:
         """
-        Get all teams for a league, using cache when available.
+        Get all teams for a league, using shared cache when available.
 
+        Uses module-level shared cache to prevent redundant API calls when
+        multiple TeamMatcher instances are used in parallel threads.
         Fetches from ESPN API and caches for CACHE_DURATION.
         College leagues use conference-based fetching to get all teams.
 
@@ -248,13 +257,15 @@ class TeamMatcher:
         Returns:
             List of team dicts with id, name, abbreviation, shortName, slug
         """
+        global _shared_team_cache
         league_lower = league_code.lower()
 
-        # Check cache
-        if league_lower in self._team_cache:
-            cached = self._team_cache[league_lower]
-            if datetime.now() - cached['fetched_at'] < self.CACHE_DURATION:
-                return cached['teams']
+        # Check shared cache first (with lock for thread safety)
+        with _shared_team_cache_lock:
+            if league_lower in _shared_team_cache:
+                cached = _shared_team_cache[league_lower]
+                if datetime.now() - cached['fetched_at'] < self.CACHE_DURATION:
+                    return cached['teams']
 
         # Get league config
         config = self._get_league_config(league_lower)
@@ -266,6 +277,14 @@ class TeamMatcher:
         sport, league = parse_api_path(config['api_path'])
         if not sport or not league:
             return []
+
+        # Double-check lock pattern: re-check cache after acquiring lock
+        # Another thread may have populated the cache while we were getting config
+        with _shared_team_cache_lock:
+            if league_lower in _shared_team_cache:
+                cached = _shared_team_cache[league_lower]
+                if datetime.now() - cached['fetched_at'] < self.CACHE_DURATION:
+                    return cached['teams']
 
         # College leagues need conference-based fetching
         if is_college_league(league_lower) or is_college_league(league):
@@ -283,11 +302,12 @@ class TeamMatcher:
         for team in teams:
             team['_search_names'] = self._build_search_names(team)
 
-        # Cache results
-        self._team_cache[league_lower] = {
-            'teams': teams,
-            'fetched_at': datetime.now()
-        }
+        # Cache results in shared cache (with lock)
+        with _shared_team_cache_lock:
+            _shared_team_cache[league_lower] = {
+                'teams': teams,
+                'fetched_at': datetime.now()
+            }
 
         logger.info(f"Cached {len(teams)} teams for {league_code}")
         return teams
@@ -883,6 +903,9 @@ class TeamMatcher:
             - raw_away, raw_home: Raw extracted strings (for debugging)
             - game_date: datetime or None - extracted date from stream name
         """
+        # TRACE: Log the input
+        logger.debug(f"[TRACE] extract_teams START | stream='{stream_name}' | league={league}")
+
         # Initialize result
         game_date, game_time = self._extract_metadata(stream_name)
         result = {
@@ -893,33 +916,46 @@ class TeamMatcher:
             'game_time': game_time
         }
 
+        # TRACE: Log extracted date/time
+        if game_date or game_time:
+            logger.debug(f"[TRACE] Metadata | date={game_date.date() if game_date else None} | time={game_time.strftime('%H:%M') if game_time else None}")
+
         # Get teams for this league
         teams = self._get_teams_for_league(league)
         if not teams:
             result['reason'] = f'No team data available for league: {league}'
+            logger.debug(f"[TRACE] extract_teams FAIL | reason=no team data for {league}")
             return result
 
         # Normalize and split the stream name
         normalized = self._normalize_for_stream(stream_name)
         if not normalized:
             result['reason'] = 'Stream name empty after normalization'
+            logger.debug(f"[TRACE] extract_teams FAIL | reason=empty after normalization")
             return result
+
+        # TRACE: Log normalized result
+        logger.debug(f"[TRACE] Normalized | '{stream_name}' -> '{normalized}'")
 
         away_part, home_part, split_error = self._split_matchup(normalized)
 
         if split_error:
             # No separator found - try separator-less matching as fallback
-            logger.debug(f"No separator found, trying separator-less matching for: {normalized}")
+            logger.debug(f"[TRACE] No separator found, trying separator-less matching for: {normalized}")
             away_team, home_team, fallback_error = self._extract_teams_without_separator(
                 normalized, league, teams
             )
 
             if fallback_error:
                 result['reason'] = fallback_error
+                logger.debug(f"[TRACE] extract_teams FAIL | reason={fallback_error}")
                 return result
         else:
             result['raw_away'] = away_part
             result['raw_home'] = home_part
+
+            # TRACE: Log the split parts
+            logger.debug(f"[TRACE] Split | away_part='{away_part}' | home_part='{home_part}'")
 
             # Find both teams using separator-based parts
             away_team = self._find_team(away_part, league, teams)
@@ -928,11 +964,13 @@ class TeamMatcher:
             if not away_team:
                 result['reason'] = f'Away team not found: {away_part}'
                 result['unmatched_team'] = away_part
+                logger.debug(f"[TRACE] extract_teams FAIL | away_part='{away_part}' not found in {league}")
                 return result
 
             if not home_team:
                 result['reason'] = f'Home team not found: {home_part}'
                 result['unmatched_team'] = home_part
+                logger.debug(f"[TRACE] extract_teams FAIL | home_part='{home_part}' not found in {league}")
                 return result
 
         # Both teams found - populate result
@@ -943,6 +981,9 @@ class TeamMatcher:
         result['home_team_id'] = home_team.get('id')
         result['home_team_name'] = home_team.get('name')
         result['home_team_abbrev'] = home_team.get('abbreviation', '')
+
+        # TRACE: Log successful match
+        logger.debug(f"[TRACE] extract_teams OK | '{away_team.get('name')}' (id={away_team.get('id')}) vs '{home_team.get('name')}' (id={home_team.get('id')})")
 
         return result
 
@@ -1375,15 +1416,17 @@ class TeamMatcher:
 
     def clear_cache(self, league: str = None) -> None:
         """
-        Clear the team cache.
+        Clear the shared team cache.
 
         Args:
             league: Specific league to clear, or None to clear all
         """
-        if league:
-            self._team_cache.pop(league.lower(), None)
-        else:
-            self._team_cache.clear()
+        global _shared_team_cache
+        with _shared_team_cache_lock:
+            if league:
+                _shared_team_cache.pop(league.lower(), None)
+            else:
+                _shared_team_cache.clear()
         logger.info(f"Team cache cleared: {league or 'all'}")
 
     def get_teams_for_league(self, league: str) -> List[Dict]:

@@ -154,6 +154,48 @@
                     <p>This group inherits template and channel settings from its parent. Only custom regex settings are editable below.</p>
                 </div>
             </div>
+
+            <!-- Hidden field for multi-sport mode (edit mode) -->
+            <input type="hidden" id="is_multi_sport" name="is_multi_sport" value="{{ '1' if group and group.is_multi_sport else '0' }}">
+
+            <!-- Multi-Sport Settings for edit mode (shown if group is multi-sport) -->
+            {% if group and group.is_multi_sport %}
+            <div id="multi-sport-settings" class="multi-sport-panel" style="display: block;">
+                <h4 style="margin: 0 0 0.75rem 0; font-size: 0.9rem;">Multi-Sport / Multi-League Configuration</h4>
+
+                <div class="form-group">
+                    <label for="enabled_leagues">Enabled Leagues</label>
+                    <div id="enabled-leagues-picker" class="leagues-picker">
+                        <span class="loading-spinner"></span> Loading leagues...
+                    </div>
+                    <input type="hidden" id="enabled_leagues" name="enabled_leagues"
+                           value="{{ group.enabled_leagues if group.enabled_leagues else '[]' }}">
+                    <small class="form-help">Select which leagues to search when detecting events. Leave empty for all leagues.</small>
+                </div>
+
+                <div class="form-row" style="margin-top: 1rem;">
+                    <div class="form-group">
+                        <label for="channel_sort_order">Channel Sort Order</label>
+                        <select id="channel_sort_order" name="channel_sort_order" class="form-control">
+                            <option value="time" {% if group.channel_sort_order == 'time' %}selected{% endif %}>By Time (chronological)</option>
+                            <option value="sport_time" {% if group.channel_sort_order == 'sport_time' %}selected{% endif %}>By Sport, then Time</option>
+                            <option value="league_time" {% if group.channel_sort_order == 'league_time' %}selected{% endif %}>By League, then Time</option>
+                        </select>
+                        <small class="form-help">How to order channels within this group</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="overlap_handling">Duplicate Stream Handling</label>
+                        <select id="overlap_handling" name="overlap_handling" class="form-control">
+                            <option value="add_stream" {% if group.overlap_handling == 'add_stream' %}selected{% endif %}>Add stream to existing channel (consolidate)</option>
+                            <option value="skip" {% if group.overlap_handling == 'skip' %}selected{% endif %}>Skip (don't create or modify)</option>
+                            <option value="create_all" {% if group.overlap_handling == 'create_all' %}selected{% endif %}>Create separate channel</option>
+                        </select>
+                        <small class="form-help">What to do when another group already has a channel for the same event</small>
+                    </div>
+                </div>
+            </div>
+            {% endif %}
             {% endif %}
         </div>
 
@@ -407,6 +449,10 @@ document.addEventListener('DOMContentLoaded', async function() {
     {% if mode == 'edit' and group.parent_group_id %}
     document.getElementById('parent_group_id').value = '{{ group.parent_group_id }}';
     handleParentGroupChange();  // Update UI based on parent selection
+    {% endif %}
+    {% if mode == 'edit' and group.is_multi_sport %}
+    // Initialize multi-sport leagues picker for edit mode
+    loadLeaguesPicker();
     {% endif %}
 });
 
@@ -1317,22 +1363,6 @@ function updateEnabledLeagues() {
     }
 }
 
-// Initialize multi-sport settings on page load (for edit mode)
-document.addEventListener('DOMContentLoaded', function() {
-    const isMultiSport = document.getElementById('is_multi_sport');
-    if (isMultiSport && isMultiSport.value === '1') {
-        // In edit mode with multi-sport enabled, show the settings panel
-        const multiSportSettings = document.getElementById('multi-sport-settings');
-        const leagueGroup = document.getElementById('league-group');
-        if (multiSportSettings) {
-            multiSportSettings.style.display = 'block';
-            loadLeaguesPicker();
-        }
-        if (leagueGroup) {
-            leagueGroup.style.display = 'none';
-        }
-    }
-});
 </script>
 
 <style>

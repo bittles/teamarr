@@ -241,13 +241,18 @@
                                 </div>
                             </td>
                             <td style="text-align: center;">
+                                {% if group.is_multi_sport %}
+                                <span class="multi-sport-badge" title="Multi-Sport / Multi-League">MUL</span>
+                                {% else %}
                                 <img src="{{ league_logos.get(group.assigned_league, '') }}"
                                      alt="{{ group.assigned_league.upper() }}"
                                      class="league-logo"
                                      title="{{ group.assigned_league.upper() }}">
+                                {% endif %}
                             </td>
-                            <td style="font-size: 1.5rem; text-align: center; vertical-align: middle;" title="{{ group.assigned_sport|title }}">
-                                {% if group.assigned_sport == 'basketball' %}🏀
+                            <td style="font-size: 1.5rem; text-align: center; vertical-align: middle;" title="{{ group.assigned_sport|title if not group.is_multi_sport else 'Multi-Sport' }}">
+                                {% if group.is_multi_sport %}🎯
+                                {% elif group.assigned_sport == 'basketball' %}🏀
                                 {% elif group.assigned_sport == 'football' %}🏈
                                 {% elif group.assigned_sport == 'baseball' %}⚾
                                 {% elif group.assigned_sport == 'hockey' %}🏒
@@ -1487,6 +1492,21 @@ code {
     vertical-align: middle;
     object-fit: contain;
     display: inline-block;
+}
+
+.multi-sport-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 30px;
+    min-width: 30px;
+    padding: 0 6px;
+    background: linear-gradient(135deg, var(--primary), var(--accent));
+    color: white;
+    font-weight: 700;
+    font-size: 0.75rem;
+    border-radius: 6px;
+    letter-spacing: 0.5px;
 }
 
 /* Toggle switch */

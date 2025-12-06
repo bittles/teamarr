@@ -682,6 +682,116 @@ class TeamMatcher:
 
         return None
 
+    def _find_all_matching_teams(self, text: str, teams: List[Dict], max_results: int = 5) -> List[Dict]:
+        """
+        Find ALL teams that match the given text, sorted by match quality.
+
+        This is used for team disambiguation when the primary match doesn't find a game.
+        For example, "Maryland" could match:
+        - Maryland Terrapins (best match - exact location)
+        - Maryland Eastern Shore Hawks (contains "Maryland")
+        - Loyola Maryland Greyhounds (contains "Maryland")
+
+        Match quality tiers (higher = better):
+        - Tier 4: Exact match
+        - Tier 3: Input is prefix of team name
+        - Tier 2: Team name appears as whole word in input
+        - Tier 1: Team name is prefix of input
+
+        Args:
+            text: Normalized text to search (e.g., "maryland")
+            teams: List of team dicts with _search_names, _primary_names, _secondary_names
+            max_results: Maximum number of teams to return (default 5)
+
+        Returns:
+            List of team dicts sorted by match quality (best first)
+        """
+        text = text.strip().lower()
+        if not text:
+            return []
+
+        # Collect all matches with their quality scores
+        # Format: (team, tier, match_length, is_primary)
+        matches = []
+        seen_team_ids = set()
+
+        for team in teams:
+            team_id = team.get('id')
+            if team_id in seen_team_ids:
+                continue
+
+            best_tier = 0
+            best_length = 0
+            best_is_primary = False
+
+            # Check primary names first (higher priority)
+            for search_name in team.get('_primary_names', []):
+                if not search_name:
+                    continue
+                search_lower = search_name.lower()
+
+                # Tier 4: Exact match
+                if text == search_lower:
+                    best_tier = 4
+                    best_length = len(search_lower)
+                    best_is_primary = True
+                    break
+
+                # Tier 3: Input is prefix of search name
+                if search_lower.startswith(text) and len(text) >= 3:
+                    if 3 > best_tier or (3 == best_tier and len(text) > best_length):
+                        best_tier = 3
+                        best_length = len(text)
+                        best_is_primary = True
+
+                # Tier 2: Whole word match
+                if len(search_lower) >= 3:
+                    pattern = r'\b' + re.escape(search_lower) + r'\b'
+                    if re.search(pattern, text):
+                        if 2 > best_tier or (2 == best_tier and len(search_lower) > best_length):
+                            best_tier = 2
+                            best_length = len(search_lower)
+                            best_is_primary = True
+
+                # Tier 1: Search name is prefix of input
+                if text.startswith(search_lower) and len(search_lower) >= 3:
+                    if 1 > best_tier or (1 == best_tier and len(search_lower) > best_length):
+                        best_tier = 1
+                        best_length = len(search_lower)
+                        best_is_primary = True
+
+            # Check secondary names (location-only, lower priority)
+            for search_name in team.get('_secondary_names', []):
+                if not search_name:
+                    continue
+                search_lower = search_name.lower()
+
+                # Tier 4: Exact match
+                if text == search_lower:
+                    if 4 > best_tier:
+                        best_tier = 4
+                        best_length = len(search_lower)
+                        best_is_primary = False
+
+                # Tier 2: Whole word match (only for secondary)
+                if len(search_lower) >= 3:
+                    pattern = r'\b' + re.escape(search_lower) + r'\b'
+                    if re.search(pattern, text):
+                        if 2 > best_tier or (2 == best_tier and len(search_lower) > best_length and not best_is_primary):
+                            best_tier = 2
+                            best_length = len(search_lower)
+                            best_is_primary = False
+
+            if best_tier > 0:
+                matches.append((team, best_tier, best_length, best_is_primary))
+                seen_team_ids.add(team_id)
+
+        # Sort by: tier (desc), is_primary (desc), length (desc)
+        matches.sort(key=lambda x: (x[1], x[3], x[2]), reverse=True)
+
+        # Return just the team dicts, limited to max_results
+        return [m[0] for m in matches[:max_results]]
+
     def _find_all_teams_in_text(self, text: str, teams: List[Dict]) -> List[Tuple[Dict, int, int]]:
         """
         Find all team matches in the given text with their positions.
@@ -1444,6 +1554,42 @@ class TeamMatcher:
         return [
             {k: v for k, v in team.items() if not k.startswith('_')}
             for team in teams
+        ]
+
+    def get_all_matching_teams(self, team_text: str, league: str, max_results: int = 5) -> List[Dict]:
+        """
+        Get all teams that match the given text in a league, sorted by match quality.
+
+        This is used for team disambiguation when the primary match doesn't find a game.
+        For example, "Maryland" could match:
+        - Maryland Terrapins (best match - exact location)
+        - Maryland Eastern Shore Hawks (contains "Maryland")
+        - Loyola Maryland Greyhounds (contains "Maryland")
+
+        Args:
+            team_text: Team name text to search for (e.g., "Maryland")
+            league: League code (e.g., "ncaam")
+            max_results: Maximum number of teams to return (default 5)
+
+        Returns:
+            List of team dicts with 'id' and 'name' keys, sorted by match quality (best first)
+        """
+        teams = self._get_teams_for_league(league)
+        if not teams:
+            return []
+
+        # Normalize the input text
+        normalized = team_text.strip().lower()
+        if not normalized:
+            return []
+
+        # Use internal method to find all matches
+        matching_teams = self._find_all_matching_teams(normalized, teams, max_results)
+
+        # Return clean version without internal search names
+        return [
+            {'id': team.get('id'), 'name': team.get('name'), 'abbrev': team.get('abbrev', '')}
+            for team in matching_teams
         ]
 
 

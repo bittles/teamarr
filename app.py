@@ -379,7 +379,60 @@ def refresh_event_group_core(group, m3u_manager, skip_m3u_refresh=False, epg_sta
                             'event': event_result['event']
                         }
                     else:
-                        # Return filter reason for counting
+                        # No game found with primary team matches - try alternate team combinations
+                        # This handles ambiguous names like "Maryland" matching multiple teams
+                        raw_away = team_result.get('raw_away', '')
+                        raw_home = team_result.get('raw_home', '')
+                        league = group['assigned_league']
+
+                        if raw_away and raw_home:
+                            # Get all teams matching each raw name
+                            all_away_teams = thread_team_matcher.get_all_matching_teams(raw_away, league, max_results=5)
+                            all_home_teams = thread_team_matcher.get_all_matching_teams(raw_home, league, max_results=5)
+
+                            # Try all combinations (skip the first one - already tried)
+                            tried_pairs = {(team_result['away_team_id'], team_result['home_team_id'])}
+
+                            for away_candidate in all_away_teams:
+                                for home_candidate in all_home_teams:
+                                    pair = (away_candidate['id'], home_candidate['id'])
+                                    if pair in tried_pairs:
+                                        continue
+                                    tried_pairs.add(pair)
+
+                                    alt_result = thread_event_matcher.find_and_enrich(
+                                        away_candidate['id'],
+                                        home_candidate['id'],
+                                        league,
+                                        game_date=team_result.get('game_date'),
+                                        game_time=team_result.get('game_time'),
+                                        include_final_events=include_final_events
+                                    )
+
+                                    if alt_result.get('found'):
+                                        # Found a match with alternate teams - update team_result
+                                        alt_team_result = team_result.copy()
+                                        alt_team_result['away_team_id'] = away_candidate['id']
+                                        alt_team_result['away_team_name'] = away_candidate['name']
+                                        alt_team_result['away_team_abbrev'] = away_candidate.get('abbrev', '')
+                                        alt_team_result['home_team_id'] = home_candidate['id']
+                                        alt_team_result['home_team_name'] = home_candidate['name']
+                                        alt_team_result['home_team_abbrev'] = home_candidate.get('abbrev', '')
+                                        alt_team_result['disambiguated'] = True  # Flag for debugging
+
+                                        app.logger.debug(
+                                            f"Team disambiguation: '{raw_away}' vs '{raw_home}' → "
+                                            f"'{away_candidate['name']}' vs '{home_candidate['name']}'"
+                                        )
+
+                                        return {
+                                            'type': 'matched',
+                                            'stream': stream,
+                                            'teams': alt_team_result,
+                                            'event': alt_result['event']
+                                        }
+
+                        # No match found with any combination
                         reason = event_result.get('reason', '')
                         normalized = INTERNAL_REASONS.get(reason, reason)
                         return {'type': 'filtered', 'reason': normalized, 'stream': stream}
@@ -614,6 +667,55 @@ def refresh_event_group_core(group, m3u_manager, skip_m3u_refresh=False, epg_sta
                     game_time=team_result.get('game_time'),
                     include_final_events=include_final_events
                 )
+
+                # If no game found, try alternate team combinations (disambiguation)
+                # This handles ambiguous names like "Maryland" matching multiple teams
+                if not event_result.get('found'):
+                    raw_away = team_result.get('raw_away', '') or raw_team1
+                    raw_home = team_result.get('raw_home', '') or raw_team2
+
+                    if raw_away and raw_home:
+                        # Get all teams matching each raw name
+                        all_away_teams = thread_team_matcher.get_all_matching_teams(raw_away, detected_league, max_results=5)
+                        all_home_teams = thread_team_matcher.get_all_matching_teams(raw_home, detected_league, max_results=5)
+
+                        # Try all combinations (skip the first one - already tried)
+                        tried_pairs = {(team_result['away_team_id'], team_result['home_team_id'])}
+
+                        for away_candidate in all_away_teams:
+                            for home_candidate in all_home_teams:
+                                pair = (away_candidate['id'], home_candidate['id'])
+                                if pair in tried_pairs:
+                                    continue
+                                tried_pairs.add(pair)
+
+                                alt_result = thread_event_matcher.find_and_enrich(
+                                    away_candidate['id'],
+                                    home_candidate['id'],
+                                    detected_league,
+                                    game_date=team_result.get('game_date'),
+                                    game_time=team_result.get('game_time'),
+                                    include_final_events=include_final_events
+                                )
+
+                                if alt_result.get('found'):
+                                    # Found a match with alternate teams - update team_result and event_result
+                                    team_result['away_team_id'] = away_candidate['id']
+                                    team_result['away_team_name'] = away_candidate['name']
+                                    team_result['away_team_abbrev'] = away_candidate.get('abbrev', '')
+                                    team_result['home_team_id'] = home_candidate['id']
+                                    team_result['home_team_name'] = home_candidate['name']
+                                    team_result['home_team_abbrev'] = home_candidate.get('abbrev', '')
+                                    team_result['disambiguated'] = True  # Flag for debugging
+                                    event_result = alt_result
+
+                                    app.logger.debug(
+                                        f"Team disambiguation (multi-sport): '{raw_away}' vs '{raw_home}' → "
+                                        f"'{away_candidate['name']}' vs '{home_candidate['name']}'"
+                                    )
+                                    break
+                            if event_result.get('found'):
+                                break
 
                 if event_result.get('found'):
                     event = event_result['event']
@@ -4400,6 +4502,48 @@ def api_event_epg_dispatcharr_streams_sse(group_id):
                                     game_time=team_result.get('game_time'),
                                     include_final_events=include_final_events
                                 )
+
+                                # If no game found, try alternate team combinations (disambiguation)
+                                if not event_result.get('found'):
+                                    raw_away = team_result.get('raw_away', '')
+                                    raw_home = team_result.get('raw_home', '')
+
+                                    if raw_away and raw_home:
+                                        all_away_teams = thread_team_matcher.get_all_matching_teams(raw_away, league, max_results=5)
+                                        all_home_teams = thread_team_matcher.get_all_matching_teams(raw_home, league, max_results=5)
+
+                                        tried_pairs = {(team_result['away_team_id'], team_result['home_team_id'])}
+
+                                        for away_candidate in all_away_teams:
+                                            for home_candidate in all_home_teams:
+                                                pair = (away_candidate['id'], home_candidate['id'])
+                                                if pair in tried_pairs:
+                                                    continue
+                                                tried_pairs.add(pair)
+
+                                                alt_result = thread_event_matcher.find_event(
+                                                    away_candidate['id'],
+                                                    home_candidate['id'],
+                                                    league,
+                                                    game_date=team_result.get('game_date'),
+                                                    game_time=team_result.get('game_time'),
+                                                    include_final_events=include_final_events
+                                                )
+
+                                                if alt_result.get('found'):
+                                                    # Update team_result with alternate teams
+                                                    team_result['away_team_id'] = away_candidate['id']
+                                                    team_result['away_team_name'] = away_candidate['name']
+                                                    team_result['away_team_abbrev'] = away_candidate.get('abbrev', '')
+                                                    team_result['home_team_id'] = home_candidate['id']
+                                                    team_result['home_team_name'] = home_candidate['name']
+                                                    team_result['home_team_abbrev'] = home_candidate.get('abbrev', '')
+                                                    team_result['disambiguated'] = True
+                                                    event_result = alt_result
+                                                    break
+                                            if event_result.get('found'):
+                                                break
+
                                 return {
                                     'stream': stream,
                                     'team_result': team_result,
@@ -4637,6 +4781,47 @@ def api_event_epg_dispatcharr_streams_sse(group_id):
                                 game_time=team_result.get('game_time'),
                                 include_final_events=include_final_events
                             )
+
+                            # If no game found, try alternate team combinations (disambiguation)
+                            if not event_result.get('found'):
+                                raw_away = team_result.get('raw_away', '') or raw_team1
+                                raw_home = team_result.get('raw_home', '') or raw_team2
+
+                                if raw_away and raw_home:
+                                    all_away_teams = thread_team_matcher.get_all_matching_teams(raw_away, detected_league, max_results=5)
+                                    all_home_teams = thread_team_matcher.get_all_matching_teams(raw_home, detected_league, max_results=5)
+
+                                    tried_pairs = {(team_result['away_team_id'], team_result['home_team_id'])}
+
+                                    for away_candidate in all_away_teams:
+                                        for home_candidate in all_home_teams:
+                                            pair = (away_candidate['id'], home_candidate['id'])
+                                            if pair in tried_pairs:
+                                                continue
+                                            tried_pairs.add(pair)
+
+                                            alt_result = thread_event_matcher.find_event(
+                                                away_candidate['id'],
+                                                home_candidate['id'],
+                                                detected_league,
+                                                game_date=team_result.get('game_date'),
+                                                game_time=team_result.get('game_time'),
+                                                include_final_events=include_final_events
+                                            )
+
+                                            if alt_result.get('found'):
+                                                # Update team_result with alternate teams
+                                                team_result['away_team_id'] = away_candidate['id']
+                                                team_result['away_team_name'] = away_candidate['name']
+                                                team_result['away_team_abbrev'] = away_candidate.get('abbrev', '')
+                                                team_result['home_team_id'] = home_candidate['id']
+                                                team_result['home_team_name'] = home_candidate['name']
+                                                team_result['home_team_abbrev'] = home_candidate.get('abbrev', '')
+                                                team_result['disambiguated'] = True
+                                                event_result = alt_result
+                                                break
+                                        if event_result.get('found'):
+                                            break
 
                             return {
                                 'stream': stream,

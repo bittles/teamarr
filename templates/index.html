@@ -239,7 +239,12 @@
                                 <td class="text-center">{{ entry.num_programmes }}</td>
                                 <td class="text-center">
                                     {% if entry.generation_time_seconds %}
-                                        {{ entry.generation_time_seconds|round|int }}s
+                                        {% set secs = entry.generation_time_seconds|round|int %}
+                                        {% if secs >= 60 %}
+                                            {{ (secs // 60)|int }}m {{ (secs % 60)|int }}s
+                                        {% else %}
+                                            {{ secs }}s
+                                        {% endif %}
                                     {% else %}
                                         -
                                     {% endif %}

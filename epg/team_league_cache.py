@@ -37,15 +37,16 @@ logger = get_logger(__name__)
 # CONSTANTS
 # =============================================================================
 
-# Non-soccer leagues to index (includes NCAA soccer as standalone leagues)
+# Non-soccer leagues to index (uses ESPN API slugs)
+# These must match league_config.league_code values
 NON_SOCCER_LEAGUES = [
     'nhl', 'nba', 'nba-g', 'wnba',
-    'nfl', 'ncaaf',
-    'ncaam', 'ncaaw',
+    'nfl', 'college-football',
+    'mens-college-basketball', 'womens-college-basketball',
     'mlb',
-    'ncaah',
-    'ncaavb-w', 'ncaavb-m',
-    'ncaas', 'ncaaws',  # NCAA soccer treated like other college sports
+    'mens-college-hockey', 'womens-college-hockey',
+    'womens-college-volleyball', 'mens-college-volleyball',
+    'usa.ncaa.m.1', 'usa.ncaa.w.1',  # NCAA soccer treated like other college sports
 ]
 
 # Thread pool size for parallel fetching

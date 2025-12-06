@@ -13,11 +13,14 @@ logger = get_logger(__name__)
 
 
 # College leagues that need conference-based team fetching
+# Includes both ESPN slugs (primary) and legacy aliases for backward compatibility
 COLLEGE_LEAGUES = {
-    'ncaam', 'ncaaw', 'ncaaf', 'ncaah', 'ncaavb-w', 'ncaavb-m', 'ncaas', 'ncaaws',
+    # ESPN slugs (primary - used in league_config.league_code)
     'mens-college-basketball', 'womens-college-basketball', 'college-football',
-    'mens-college-hockey', 'womens-college-volleyball', 'mens-college-volleyball',
-    'usa.ncaa.m.1', 'usa.ncaa.w.1'  # ESPN soccer slugs for NCAA soccer
+    'mens-college-hockey', 'womens-college-hockey', 'mens-college-volleyball', 'womens-college-volleyball',
+    'usa.ncaa.m.1', 'usa.ncaa.w.1',  # NCAA soccer
+    # Legacy aliases (for backward compatibility during transition)
+    'ncaam', 'ncaaw', 'ncaaf', 'ncaah', 'ncaawh', 'ncaavb-m', 'ncaavb-w', 'ncaas', 'ncaaws',
 }
 
 

@@ -159,7 +159,7 @@ def db_insert(query: str, params: tuple = ()) -> int:
 #   16: Multi-sport event groups (is_multi_sport, enabled_leagues, etc.)
 # =============================================================================
 
-CURRENT_SCHEMA_VERSION = 17
+CURRENT_SCHEMA_VERSION = 18
 
 
 def get_schema_version(conn) -> int:
@@ -1011,20 +1011,227 @@ def run_migrations(conn):
         conn.commit()
 
     # =========================================================================
-    # 17. NCAA SOCCER LEAGUES
+    # 17. NCAA SOCCER LEAGUES (legacy - replaced by migration 18)
     # =========================================================================
-    if current_version < 17:
-        # Add NCAA Men's and Women's Soccer to league_config
-        cursor.execute("""
-            INSERT OR IGNORE INTO league_config
-            (league_code, league_name, sport, api_path, default_category, record_format, logo_url)
-            VALUES
-            ('ncaas', 'NCAA Men''s Soccer', 'soccer', 'soccer/usa.ncaa.m.1', 'Soccer', 'wins-losses-ties', 'https://www.ncaa.com/modules/custom/casablanca_core/img/sportbanners/soccer.png'),
-            ('ncaaws', 'NCAA Women''s Soccer', 'soccer', 'soccer/usa.ncaa.w.1', 'Soccer', 'wins-losses-ties', 'https://www.ncaa.com/modules/custom/casablanca_core/img/sportbanners/soccer.png')
-        """)
-        migrations_run += 1
-        print("    ✅ Added NCAA Men's and Women's Soccer to league_config")
+    # Skipped - migration 18 adds these with correct ESPN slugs
+
+    # =========================================================================
+    # 18. LEAGUE CODE NORMALIZATION - Use ESPN slugs as league_code
+    # =========================================================================
+    if current_version < 18:
+        print("  🔄 Running migration 18: Normalizing league codes to ESPN slugs...")
+
+        # 18a. Create league_id_aliases table
+        if not table_exists("league_id_aliases"):
+            try:
+                cursor.execute("""
+                    CREATE TABLE league_id_aliases (
+                        espn_slug TEXT PRIMARY KEY,
+                        alias TEXT NOT NULL,
+                        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                migrations_run += 1
+                print("    ✅ Created table: league_id_aliases")
+            except Exception as e:
+                print(f"    ⚠️ Could not create league_id_aliases table: {e}")
+            conn.commit()
+
+        # 18b. Define league code mappings (old_code -> new_espn_slug)
+        league_code_mappings = [
+            # Basketball
+            ('nba-g', 'nba-development'),
+            ('ncaam', 'mens-college-basketball'),
+            ('ncaaw', 'womens-college-basketball'),
+            # Football
+            ('ncaaf', 'college-football'),
+            # Hockey
+            ('ncaah', 'mens-college-hockey'),
+            # Soccer
+            ('epl', 'eng.1'),
+            ('laliga', 'esp.1'),
+            ('bundesliga', 'ger.1'),
+            ('seriea', 'ita.1'),
+            ('ligue1', 'fra.1'),
+            ('mls', 'usa.1'),
+            ('nwsl', 'usa.nwsl'),
+            ('efl', 'eng.2'),
+            ('efl1', 'eng.3'),
+            # Volleyball
+            ('ncaavb-m', 'mens-college-volleyball'),
+            ('ncaavb-w', 'womens-college-volleyball'),
+        ]
+
+        # 18c. Update league_config with new league_codes
+        for old_code, new_code in league_code_mappings:
+            try:
+                cursor.execute(
+                    "UPDATE league_config SET league_code = ? WHERE league_code = ?",
+                    (new_code, old_code)
+                )
+                if cursor.rowcount > 0:
+                    print(f"    ✅ Updated league_config: {old_code} → {new_code}")
+            except Exception as e:
+                print(f"    ⚠️ Could not update league_config {old_code}: {e}")
         conn.commit()
+
+        # 18d. Update teams table references
+        for old_code, new_code in league_code_mappings:
+            try:
+                cursor.execute(
+                    "UPDATE teams SET league = ? WHERE league = ?",
+                    (new_code, old_code)
+                )
+                if cursor.rowcount > 0:
+                    print(f"    ✅ Updated teams: {old_code} → {new_code} ({cursor.rowcount} rows)")
+            except Exception as e:
+                print(f"    ⚠️ Could not update teams {old_code}: {e}")
+        conn.commit()
+
+        # 18e. Update event_epg_groups references
+        for old_code, new_code in league_code_mappings:
+            try:
+                cursor.execute(
+                    "UPDATE event_epg_groups SET assigned_league = ? WHERE assigned_league = ?",
+                    (new_code, old_code)
+                )
+                if cursor.rowcount > 0:
+                    print(f"    ✅ Updated event_epg_groups: {old_code} → {new_code} ({cursor.rowcount} rows)")
+            except Exception as e:
+                print(f"    ⚠️ Could not update event_epg_groups {old_code}: {e}")
+        conn.commit()
+
+        # 18f. Seed league_id_aliases with friendly names
+        aliases = [
+            # Soccer
+            ('eng.1', 'epl'),
+            ('esp.1', 'laliga'),
+            ('ger.1', 'bundesliga'),
+            ('ita.1', 'seriea'),
+            ('fra.1', 'ligue1'),
+            ('usa.1', 'mls'),
+            ('usa.nwsl', 'nwsl'),
+            ('eng.2', 'efl'),
+            ('eng.3', 'efl1'),
+            ('uefa.champions', 'ucl'),
+            # College sports
+            ('mens-college-basketball', 'ncaam'),
+            ('womens-college-basketball', 'ncaaw'),
+            ('college-football', 'ncaaf'),
+            ('mens-college-hockey', 'ncaah'),
+            ('nba-development', 'nbag'),
+            ('mens-college-volleyball', 'ncaavbm'),
+            ('womens-college-volleyball', 'ncaavbw'),
+            ('usa.ncaa.m.1', 'ncaas'),
+            ('usa.ncaa.w.1', 'ncaaws'),
+        ]
+        for espn_slug, alias in aliases:
+            try:
+                cursor.execute(
+                    "INSERT OR IGNORE INTO league_id_aliases (espn_slug, alias) VALUES (?, ?)",
+                    (espn_slug, alias)
+                )
+            except Exception as e:
+                print(f"    ⚠️ Could not insert alias {espn_slug}: {e}")
+        conn.commit()
+        print(f"    ✅ Seeded {len(aliases)} league aliases")
+
+        # 18g. Add new leagues to league_config
+        new_leagues = [
+            # UEFA Champions League
+            ('uefa.champions', 'UEFA Champions League', 'soccer', 'soccer/uefa.champions', 'Soccer', 'wins-draws-losses', 'https://a.espncdn.com/i/leaguelogos/soccer/500/2.png'),
+            # NCAA Soccer (with ESPN slugs as league_code)
+            ('usa.ncaa.m.1', 'NCAA Men\'s Soccer', 'soccer', 'soccer/usa.ncaa.m.1', 'Soccer', 'wins-losses-ties', 'https://www.ncaa.com/modules/custom/casablanca_core/img/sportbanners/soccer.png'),
+            ('usa.ncaa.w.1', 'NCAA Women\'s Soccer', 'soccer', 'soccer/usa.ncaa.w.1', 'Soccer', 'wins-losses-ties', 'https://www.ncaa.com/modules/custom/casablanca_core/img/sportbanners/soccer.png'),
+        ]
+        for league_code, league_name, sport, api_path, category, record_format, logo_url in new_leagues:
+            try:
+                cursor.execute("""
+                    INSERT OR IGNORE INTO league_config
+                    (league_code, league_name, sport, api_path, default_category, record_format, logo_url)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (league_code, league_name, sport, api_path, category, record_format, logo_url))
+                if cursor.rowcount > 0:
+                    print(f"    ✅ Added league: {league_name}")
+            except Exception as e:
+                print(f"    ⚠️ Could not add league {league_code}: {e}")
+        conn.commit()
+
+        # 18h. Fix consolidation_exception_keywords table (make global, remove group_id)
+        # Migration 14 was supposed to do this but may not have run
+        try:
+            cursor.execute("PRAGMA table_info(consolidation_exception_keywords)")
+            columns = {row[1] for row in cursor.fetchall()}
+            if 'group_id' in columns:
+                # Recreate table without group_id
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS consolidation_exception_keywords_new (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        keywords TEXT NOT NULL,
+                        behavior TEXT NOT NULL DEFAULT 'consolidate',
+                        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                # Copy existing data (deduplicate by keywords)
+                cursor.execute("""
+                    INSERT OR IGNORE INTO consolidation_exception_keywords_new (keywords, behavior, created_at)
+                    SELECT DISTINCT keywords, behavior, created_at
+                    FROM consolidation_exception_keywords
+                """)
+                cursor.execute("DROP TABLE consolidation_exception_keywords")
+                cursor.execute("ALTER TABLE consolidation_exception_keywords_new RENAME TO consolidation_exception_keywords")
+                conn.commit()
+                print("    ✅ Fixed consolidation_exception_keywords table (removed group_id)")
+        except Exception as e:
+            print(f"    ⚠️ Could not fix exception keywords table: {e}")
+
+        # 18i. Seed default language exception keywords for sub-consolidation
+        # These ensure Spanish/French/etc streams get their own channel, separate from English
+        language_keywords = [
+            ('En Español, (ESP), Spanish, Español', 'consolidate'),
+            ('En Français, (FRA), French, Français', 'consolidate'),
+            ('(GER), German, Deutsch', 'consolidate'),
+            ('(POR), Portuguese, Português', 'consolidate'),
+            ('(ITA), Italian, Italiano', 'consolidate'),
+            ('(ARA), Arabic, العربية', 'consolidate'),
+        ]
+        for keywords, behavior in language_keywords:
+            try:
+                cursor.execute(
+                    "INSERT OR IGNORE INTO consolidation_exception_keywords (keywords, behavior) VALUES (?, ?)",
+                    (keywords, behavior)
+                )
+            except Exception as e:
+                print(f"    ⚠️ Could not insert language keyword: {e}")
+        conn.commit()
+        print(f"    ✅ Seeded {len(language_keywords)} language exception keywords")
+
+        # 18j. Update team_league_cache to use ESPN slugs
+        # This cache stores league_code which needs to match league_config
+        tlc_mappings = [
+            ('ncaam', 'mens-college-basketball'),
+            ('ncaaw', 'womens-college-basketball'),
+            ('ncaaf', 'college-football'),
+            ('ncaah', 'mens-college-hockey'),
+            ('ncaavb-m', 'mens-college-volleyball'),
+            ('ncaavb-w', 'womens-college-volleyball'),
+            ('ncaas', 'usa.ncaa.m.1'),
+            ('ncaaws', 'usa.ncaa.w.1'),
+        ]
+        for old_code, new_code in tlc_mappings:
+            try:
+                cursor.execute(
+                    "UPDATE team_league_cache SET league_code = ? WHERE league_code = ?",
+                    (new_code, old_code)
+                )
+                if cursor.rowcount > 0:
+                    print(f"    ✅ Updated team_league_cache: {old_code} → {new_code} ({cursor.rowcount} rows)")
+            except Exception as e:
+                print(f"    ⚠️ Could not update team_league_cache {old_code}: {e}")
+        conn.commit()
+
+        migrations_run += 1
+        print("    ✅ Migration 18 complete: League codes normalized to ESPN slugs")
 
     # =========================================================================
     # UPDATE SCHEMA VERSION

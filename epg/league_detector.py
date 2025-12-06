@@ -55,6 +55,61 @@ def strip_team_numbers(name: str) -> str:
     return stripped
 
 
+def get_abbreviation_variants(name: str) -> List[str]:
+    """
+    Generate all variants of a name with/without periods in common abbreviations.
+
+    Handles inconsistencies in API data where team names may have periods:
+    - "St. Lawrence Saints" vs "St Lawrence Saints"
+    - "Mt. Rainier" vs "Mt Rainier"
+    - "Ft. Wayne" vs "Ft Wayne"
+
+    Common abbreviations handled:
+    - st/st. (Saint)
+    - mt/mt. (Mount)
+    - ft/ft. (Fort)
+
+    Args:
+        name: Team name to generate variants for
+
+    Returns:
+        List of unique variants (always includes original)
+    """
+    variants = set()
+    name_lower = name.lower().strip()
+    variants.add(name_lower)
+
+    # Common abbreviations that may appear with or without periods in sports team names
+    # Pattern: word boundary, abbreviation, optional period, space
+    abbrevs = ['st', 'mt', 'ft']
+
+    # Create variant WITH periods: "st lawrence" -> "st. lawrence"
+    with_period = name_lower
+    for abbrev in abbrevs:
+        # Only match if followed by space (not end of string) to avoid false positives
+        with_period = re.sub(
+            rf'\b{abbrev}\s+',
+            f'{abbrev}. ',
+            with_period,
+            flags=re.IGNORECASE
+        )
+    variants.add(with_period)
+
+    # Create variant WITHOUT periods: "st. lawrence" -> "st lawrence"
+    without_period = name_lower
+    for abbrev in abbrevs:
+        without_period = re.sub(
+            rf'\b{abbrev}\.\s+',
+            f'{abbrev} ',
+            without_period,
+            flags=re.IGNORECASE
+        )
+    variants.add(without_period)
+
+    # Return unique variants (filter out duplicates)
+    return list(variants)
+
+
 def strip_accents(text: str) -> str:
     """
     Remove diacritical marks (accents) from text.
@@ -605,19 +660,22 @@ class LeagueDetector:
                 Find leagues for a team with tiered fallback search.
 
                 Tiers:
-                1. Direct match (exact or substring)
+                1. Direct match with abbreviation variants (st/st., mt/mt.)
                 2. Accent-normalized match (Atletico -> Atlético)
                 3. Number-stripped match (SV Elversberg -> SV 07 Elversberg)
                 4. Article-stripped match (Atlético de Madrid -> Atlético Madrid)
                 """
-                # Tier 1: Direct match
-                cursor.execute("""
-                    SELECT DISTINCT league_slug FROM soccer_team_leagues
-                    WHERE LOWER(team_name) LIKE ?
-                       OR LOWER(team_name) LIKE ?
-                       OR INSTR(?, LOWER(team_name)) > 0
-                """, (f"%{team_name}%", f"{team_name}%", team_name))
-                leagues = {row[0] for row in cursor.fetchall()}
+                # Tier 1: Direct match with abbreviation variants (st/st., mt/mt.)
+                leagues = set()
+                for variant in get_abbreviation_variants(team_name):
+                    cursor.execute("""
+                        SELECT DISTINCT league_slug FROM soccer_team_leagues
+                        WHERE LOWER(team_name) LIKE ?
+                           OR LOWER(team_name) LIKE ?
+                           OR INSTR(?, LOWER(team_name)) > 0
+                    """, (f"%{variant}%", f"{variant}%", variant))
+                    for row in cursor.fetchall():
+                        leagues.add(row[0])
 
                 if leagues:
                     return leagues
@@ -781,7 +839,7 @@ class LeagueDetector:
                 Find a team in a league with tiered fallback matching.
 
                 Tiers:
-                1. Direct match (exact or substring)
+                1. Direct match with abbreviation variants (st/st., mt/mt.)
                 2. Accent-normalized match (Atletico -> Atlético)
                 3. Number-stripped match (SV Elversberg -> SV 07 Elversberg)
                 4. Article-stripped match (Atlético de Madrid -> Atlético Madrid)
@@ -791,20 +849,21 @@ class LeagueDetector:
                 team_stripped = normalize_team_name(team_lower, strip_articles=False)
                 team_normalized = normalize_team_name(team_lower, strip_articles=True)
 
-                # Tier 1: Direct match (bidirectional substring)
-                cursor.execute("""
-                    SELECT espn_team_id, team_name FROM soccer_team_leagues
-                    WHERE league_slug = ? AND (
-                        LOWER(team_name) LIKE ?
-                        OR LOWER(team_name) LIKE ?
-                        OR INSTR(?, LOWER(team_name)) > 0
-                    )
-                    ORDER BY LENGTH(team_name) ASC
-                    LIMIT 1
-                """, (league, f"%{team_lower}%", f"{team_lower}%", team_lower))
-                row = cursor.fetchone()
-                if row:
-                    return row
+                # Tier 1: Direct match with abbreviation variants (st/st., mt/mt.)
+                for variant in get_abbreviation_variants(team_name):
+                    cursor.execute("""
+                        SELECT espn_team_id, team_name FROM soccer_team_leagues
+                        WHERE league_slug = ? AND (
+                            LOWER(team_name) LIKE ?
+                            OR LOWER(team_name) LIKE ?
+                            OR INSTR(?, LOWER(team_name)) > 0
+                        )
+                        ORDER BY LENGTH(team_name) ASC
+                        LIMIT 1
+                    """, (league, f"%{variant}%", f"{variant}%", variant))
+                    row = cursor.fetchone()
+                    if row:
+                        return row
 
                 # Tier 2: Accent-normalized match
                 # Handles "Atletico" (stream) matching "Atlético" (DB)
@@ -984,7 +1043,8 @@ class LeagueDetector:
     def diagnose_team_match_failure(
         self,
         team1: str,
-        team2: str
+        team2: str,
+        stream_name: str = None
     ) -> Dict[str, Any]:
         """
         Diagnose why teams couldn't be matched to a common league.
@@ -995,6 +1055,7 @@ class LeagueDetector:
         Args:
             team1: First team name from stream
             team2: Second team name from stream
+            stream_name: Optional full stream name (for detecting boxing/MMA)
 
         Returns:
             Dict with diagnostic info:
@@ -1023,60 +1084,86 @@ class LeagueDetector:
         conn = get_connection()
         try:
             cursor = conn.cursor()
-            team1_lower = team1.lower().strip()
-            team2_lower = team2.lower().strip()
 
-            # Find leagues for team1 (check both soccer_team_leagues and team_league_cache)
-            cursor.execute("""
-                SELECT DISTINCT league_slug, team_name FROM soccer_team_leagues
-                WHERE LOWER(team_name) LIKE ?
-                   OR LOWER(team_name) LIKE ?
-                   OR INSTR(?, LOWER(team_name)) > 0
-                UNION
-                SELECT DISTINCT league_code, team_name FROM team_league_cache
-                WHERE LOWER(team_name) LIKE ?
-                   OR LOWER(team_name) LIKE ?
-                   OR LOWER(team_short_name) LIKE ?
-                   OR INSTR(?, LOWER(team_name)) > 0
-                   OR INSTR(?, LOWER(team_short_name)) > 0
-            """, (f"%{team1_lower}%", f"{team1_lower}%", team1_lower,
-                  f"%{team1_lower}%", f"{team1_lower}%", f"%{team1_lower}%", team1_lower, team1_lower))
-            team1_results = cursor.fetchall()
-            team1_leagues = list(set(r[0] for r in team1_results))
+            # Get all variants of team names (with/without periods in abbreviations)
+            team1_variants = get_abbreviation_variants(team1)
+            team2_variants = get_abbreviation_variants(team2)
+
+            # Build dynamic query for all team1 variants
+            # Each variant gets a LIKE clause in both soccer and US sports caches
+            team1_leagues = set()
+            for variant in team1_variants:
+                cursor.execute("""
+                    SELECT DISTINCT league_slug, team_name FROM soccer_team_leagues
+                    WHERE LOWER(team_name) LIKE ?
+                       OR INSTR(?, LOWER(team_name)) > 0
+                    UNION
+                    SELECT DISTINCT league_code, team_name FROM team_league_cache
+                    WHERE LOWER(team_name) LIKE ?
+                       OR LOWER(team_short_name) LIKE ?
+                       OR INSTR(?, LOWER(team_name)) > 0
+                       OR INSTR(?, LOWER(team_short_name)) > 0
+                """, (f"%{variant}%", variant, f"%{variant}%", f"%{variant}%", variant, variant))
+                for row in cursor.fetchall():
+                    team1_leagues.add(row[0])
+            team1_leagues = list(team1_leagues)
             team1_found = len(team1_leagues) > 0
 
-            # Find leagues for team2 (check both soccer_team_leagues and team_league_cache)
-            cursor.execute("""
-                SELECT DISTINCT league_slug, team_name FROM soccer_team_leagues
-                WHERE LOWER(team_name) LIKE ?
-                   OR LOWER(team_name) LIKE ?
-                   OR INSTR(?, LOWER(team_name)) > 0
-                UNION
-                SELECT DISTINCT league_code, team_name FROM team_league_cache
-                WHERE LOWER(team_name) LIKE ?
-                   OR LOWER(team_name) LIKE ?
-                   OR LOWER(team_short_name) LIKE ?
-                   OR INSTR(?, LOWER(team_name)) > 0
-                   OR INSTR(?, LOWER(team_short_name)) > 0
-            """, (f"%{team2_lower}%", f"{team2_lower}%", team2_lower,
-                  f"%{team2_lower}%", f"{team2_lower}%", f"%{team2_lower}%", team2_lower, team2_lower))
-            team2_results = cursor.fetchall()
-            team2_leagues = list(set(r[0] for r in team2_results))
+            # Build dynamic query for all team2 variants
+            team2_leagues = set()
+            for variant in team2_variants:
+                cursor.execute("""
+                    SELECT DISTINCT league_slug, team_name FROM soccer_team_leagues
+                    WHERE LOWER(team_name) LIKE ?
+                       OR INSTR(?, LOWER(team_name)) > 0
+                    UNION
+                    SELECT DISTINCT league_code, team_name FROM team_league_cache
+                    WHERE LOWER(team_name) LIKE ?
+                       OR LOWER(team_short_name) LIKE ?
+                       OR INSTR(?, LOWER(team_name)) > 0
+                       OR INSTR(?, LOWER(team_short_name)) > 0
+                """, (f"%{variant}%", variant, f"%{variant}%", f"%{variant}%", variant, variant))
+                for row in cursor.fetchall():
+                    team2_leagues.add(row[0])
+            team2_leagues = list(team2_leagues)
             team2_found = len(team2_leagues) > 0
 
             # Find common leagues
             common_leagues = list(set(team1_leagues) & set(team2_leagues))
 
             # Determine reason and detail
+            from utils.filter_reasons import is_beach_soccer, is_boxing_mma
+
             if not team1_found and not team2_found:
-                reason = FilterReason.TEAMS_NOT_IN_ESPN
-                detail = f"Neither '{team1}' nor '{team2}' found in ESPN database"
+                # Neither team found - check if it's an unsupported sport as FINAL fallback
+                # This gives better user feedback than just "teams not found"
+                if stream_name and is_boxing_mma(stream_name):
+                    reason = FilterReason.UNSUPPORTED_BOXING_MMA
+                    detail = "Boxing/MMA not supported by ESPN API"
+                    logger.debug(f"Boxing/MMA detected: {stream_name}")
+                elif is_beach_soccer(team1, team2):
+                    reason = FilterReason.UNSUPPORTED_BEACH_SOCCER
+                    detail = "Beach soccer not supported by ESPN API"
+                    logger.debug(f"Beach soccer detected: '{team1}' vs '{team2}'")
+                else:
+                    reason = FilterReason.TEAMS_NOT_IN_ESPN
+                    detail = f"Neither '{team1}' nor '{team2}' found in ESPN database"
             elif not team1_found:
-                reason = FilterReason.TEAMS_NOT_IN_ESPN
-                detail = f"'{team1}' not found in ESPN database"
+                # Only team1 not found - check if it looks like unsupported sport
+                if is_beach_soccer(team1, None):
+                    reason = FilterReason.UNSUPPORTED_BEACH_SOCCER
+                    detail = "Beach soccer not supported by ESPN API"
+                else:
+                    reason = FilterReason.TEAMS_NOT_IN_ESPN
+                    detail = f"'{team1}' not found in ESPN database"
             elif not team2_found:
-                reason = FilterReason.TEAMS_NOT_IN_ESPN
-                detail = f"'{team2}' not found in ESPN database"
+                # Only team2 not found - check if it looks like unsupported sport
+                if is_beach_soccer(None, team2):
+                    reason = FilterReason.UNSUPPORTED_BEACH_SOCCER
+                    detail = "Beach soccer not supported by ESPN API"
+                else:
+                    reason = FilterReason.TEAMS_NOT_IN_ESPN
+                    detail = f"'{team2}' not found in ESPN database"
             elif not common_leagues:
                 reason = FilterReason.NO_COMMON_LEAGUE
                 detail = (f"'{team1}' in [{', '.join(team1_leagues[:3])}{'...' if len(team1_leagues) > 3 else ''}], "
@@ -1273,12 +1360,42 @@ class LeagueDetector:
                 candidates_checked=candidates
             )
 
+        # Resolve team IDs from cache if not provided
+        # This is critical - schedule API requires team IDs, not names
+        if not team1_id or not team2_id:
+            from epg.team_league_cache import TeamLeagueCache
+            if not team1_id:
+                team1_info = TeamLeagueCache.get_team_info(team1)
+                if team1_info:
+                    team1_id = team1_info[0].espn_team_id
+                    logger.debug(f"Resolved team1 '{team1}' to ID {team1_id}")
+            if not team2_id:
+                team2_info = TeamLeagueCache.get_team_info(team2)
+                if team2_info:
+                    team2_id = team2_info[0].espn_team_id
+                    logger.debug(f"Resolved team2 '{team2}' to ID {team2_id}")
+
+        # If we still don't have IDs, we can't do schedule disambiguation
+        if not team1_id or not team2_id:
+            logger.warning(f"Could not resolve team IDs for schedule check: {team1}={team1_id}, {team2}={team2_id}")
+            # Return first candidate as best guess
+            league = candidates[0]
+            return DetectionResult(
+                detected=True,
+                league=league,
+                sport=get_sport_for_league(league),
+                tier=3,
+                tier_detail='3c',
+                method=f"First candidate (could not resolve team IDs): {league.upper()}",
+                candidates_checked=candidates
+            )
+
         # Determine tier based on available date/time
         if game_date and game_time:
             # Tier 3a: Exact date + time
             return self._detect_tier3a(
-                team1_id or team1,
-                team2_id or team2,
+                team1_id,
+                team2_id,
                 candidates,
                 game_date,
                 game_time
@@ -1286,16 +1403,16 @@ class LeagueDetector:
         elif game_time:
             # Tier 3b: Time only, infer today
             return self._detect_tier3b(
-                team1_id or team1,
-                team2_id or team2,
+                team1_id,
+                team2_id,
                 candidates,
                 game_time
             )
         else:
             # Tier 3c: Teams only, find closest game
             return self._detect_tier3c(
-                team1_id or team1,
-                team2_id or team2,
+                team1_id,
+                team2_id,
                 candidates
             )
 
@@ -1515,23 +1632,31 @@ class LeagueDetector:
         team2_entries = []
 
         # Check US sports cache (team_league_cache)
+        # Use abbreviation variants to handle st/st., mt/mt., etc.
         for team_name, entries_list in [(team1, team1_entries), (team2, team2_entries)]:
-            cursor.execute("""
-                SELECT espn_team_id, league_code, team_name
-                FROM team_league_cache
-                WHERE LOWER(team_name) LIKE ?
-            """, (f'%{team_name.lower()}%',))
-            for row in cursor.fetchall():
-                entries_list.append((row[0], row[1], row[2], 'us_sports'))
+            variants = get_abbreviation_variants(team_name)
+            for variant in variants:
+                cursor.execute("""
+                    SELECT espn_team_id, league_code, team_name
+                    FROM team_league_cache
+                    WHERE LOWER(team_name) LIKE ?
+                """, (f'%{variant}%',))
+                for row in cursor.fetchall():
+                    # Avoid duplicates
+                    entry = (row[0], row[1], row[2], 'us_sports')
+                    if entry not in entries_list:
+                        entries_list.append(entry)
 
-            # Also check soccer cache
-            cursor.execute("""
-                SELECT espn_team_id, league_slug, team_name
-                FROM soccer_team_leagues
-                WHERE LOWER(team_name) LIKE ?
-            """, (f'%{team_name.lower()}%',))
-            for row in cursor.fetchall():
-                entries_list.append((row[0], row[1], row[2], 'soccer'))
+                # Also check soccer cache
+                cursor.execute("""
+                    SELECT espn_team_id, league_slug, team_name
+                    FROM soccer_team_leagues
+                    WHERE LOWER(team_name) LIKE ?
+                """, (f'%{variant}%',))
+                for row in cursor.fetchall():
+                    entry = (row[0], row[1], row[2], 'soccer')
+                    if entry not in entries_list:
+                        entries_list.append(entry)
 
         conn.close()
 

@@ -70,6 +70,16 @@ class FilterReason:
     # Teams parsed but no common league found (each team in different leagues)
     NO_COMMON_LEAGUE = 'no_common_league'
 
+    # =========================================================================
+    # Unsupported Sport/League Reasons
+    # =========================================================================
+
+    # Beach soccer detected (BS/BSC suffix) - not supported by ESPN API
+    UNSUPPORTED_BEACH_SOCCER = 'unsupported_beach_soccer'
+
+    # Boxing/MMA detected (main card, undercard, prelims) - not supported
+    UNSUPPORTED_BOXING_MMA = 'unsupported_boxing_mma'
+
 
 # Display text for user-facing UI (preview modal, etc.)
 DISPLAY_TEXT = {
@@ -83,6 +93,8 @@ DISPLAY_TEXT = {
     FilterReason.TEAMS_NOT_PARSED: 'Teams not parsed',
     FilterReason.TEAMS_NOT_IN_ESPN: 'Team(s) not in ESPN database',
     FilterReason.NO_COMMON_LEAGUE: 'No common league for teams',
+    FilterReason.UNSUPPORTED_BEACH_SOCCER: 'Unsupported (Beach Soccer)',
+    FilterReason.UNSUPPORTED_BOXING_MMA: 'Unsupported (Boxing/MMA)',
 }
 
 # Internal reasons (used by event_matcher.py for backwards compatibility)
@@ -171,3 +183,64 @@ DB_COLUMN_MAPPING = {
     FilterReason.GAME_FINAL_EXCLUDED: 'filtered_final',
     FilterReason.NO_GAME_FOUND: 'filtered_outside_lookahead',  # Combined with GAME_PAST
 }
+
+
+def is_boxing_mma(stream_name: str) -> bool:
+    """
+    Detect if stream is likely boxing/MMA based on card terminology.
+
+    Boxing/MMA events commonly use:
+    - "Main Card", "Maincard"
+    - "Under Card", "Undercard"
+    - "Prelims", "Preliminary Card"
+    - "Early Prelims"
+
+    Args:
+        stream_name: Full stream name to check
+
+    Returns:
+        True if stream appears to be a boxing/MMA event
+    """
+    import re
+
+    if not stream_name:
+        return False
+
+    # Pattern: main card, maincard, under card, undercard, prelims, preliminary
+    boxing_pattern = re.compile(
+        r'\b(main\s*card|under\s*card|prelims|preliminary\s*card|early\s*prelims)\b',
+        re.IGNORECASE
+    )
+
+    return bool(boxing_pattern.search(stream_name))
+
+
+def is_beach_soccer(team1: str, team2: str) -> bool:
+    """
+    Detect if teams are likely beach soccer based on BS/BSC suffix.
+
+    Beach soccer clubs commonly use:
+    - BS = Beach Soccer (e.g., "Zarcero BS", "Sao Pedro BS")
+    - BSC = Beach Soccer Club (e.g., "Nassau BSC", "Cali BSC")
+
+    Args:
+        team1: First team name
+        team2: Second team name
+
+    Returns:
+        True if either team appears to be a beach soccer team
+    """
+    import re
+
+    if not team1 and not team2:
+        return False
+
+    # Pattern: team name ending with BS or BSC (case-insensitive)
+    # Must be at end of string, optionally followed by closing paren
+    beach_pattern = re.compile(r'\b(BS|BSC)\s*\)?$', re.IGNORECASE)
+
+    for team in [team1, team2]:
+        if team and beach_pattern.search(team.strip()):
+            return True
+
+    return False

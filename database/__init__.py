@@ -158,6 +158,7 @@ _ALIAS_VARIANTS = {
     'ncaaf': 'college-football',
     # College hockey
     'ncaah': 'mens-college-hockey',
+    'ncaawh': 'womens-college-hockey',
     # College volleyball (multiple alias formats)
     'ncaavbm': 'mens-college-volleyball',
     'ncaavb-m': 'mens-college-volleyball',

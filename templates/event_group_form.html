@@ -1227,10 +1227,10 @@ document.getElementById('event-group-form').addEventListener('submit', async fun
 // ============================================================================
 
 // League definitions for the picker
+// Sorted alphabetically by sport name
 const multiSportLeagues = {
-    'hockey': [
-        { value: 'nhl', label: 'NHL' },
-        { value: 'ncaah', label: 'NCAA Hockey' },
+    'baseball': [
+        { value: 'mlb', label: 'MLB' },
     ],
     'basketball': [
         { value: 'nba', label: 'NBA' },
@@ -1243,18 +1243,20 @@ const multiSportLeagues = {
         { value: 'nfl', label: 'NFL' },
         { value: 'ncaaf', label: 'NCAA Football' },
     ],
-    'baseball': [
-        { value: 'mlb', label: 'MLB' },
-    ],
-    'volleyball': [
-        { value: 'ncaavb-m', label: 'NCAA Men\'s Volleyball' },
-        { value: 'ncaavb-w', label: 'NCAA Women\'s Volleyball' },
+    'hockey': [
+        { value: 'nhl', label: 'NHL' },
+        { value: 'ncaah', label: 'NCAA Men\'s Hockey' },
+        { value: 'ncaawh', label: 'NCAA Women\'s Hockey' },
     ],
     'soccer': [
         { value: 'ncaas', label: 'NCAA Men\'s Soccer' },
         { value: 'ncaaws', label: 'NCAA Women\'s Soccer' },
         { value: 'soccer_all', label: 'Professional Soccer (All)' },
-    ]
+    ],
+    'volleyball': [
+        { value: 'ncaavb', label: 'NCAA Men\'s Volleyball' },
+        { value: 'ncaawvb', label: 'NCAA Women\'s Volleyball' },
+    ],
 };
 
 // Soccer professional leagues uses SoccerMultiLeague cache with 240+ leagues

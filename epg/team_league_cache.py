@@ -100,7 +100,8 @@ class TeamLeagueCache:
         Find all leagues a team name could belong to.
 
         Matches against team_name, team_abbrev, and team_short_name.
-        Case-insensitive. Handles punctuation differences (apostrophes, periods).
+        Case-insensitive. Handles punctuation differences (apostrophes, periods)
+        and common abbreviation variants (st/st., mt/mt., ft/ft.).
 
         Args:
             team_name: Team name to search (e.g., "Predators", "NSH", "Nashville")
@@ -111,28 +112,37 @@ class TeamLeagueCache:
         if not team_name:
             return set()
 
-        team_lower = team_name.lower().strip()
+        # Import here to avoid circular imports
+        from epg.league_detector import get_abbreviation_variants
 
-        # Also create a normalized version without punctuation for flexible matching
-        # This handles cases like "mount st mary's" matching "Mount St. Mary's"
-        import re
-        team_normalized = re.sub(r"[.'`]", '', team_lower)
+        # Get all abbreviation variants (with/without periods in st/st., mt/mt., etc.)
+        variants = get_abbreviation_variants(team_name)
+        results = set()
 
         conn = get_connection()
         try:
             cursor = conn.cursor()
-            # First try exact match with punctuation
-            cursor.execute("""
-                SELECT DISTINCT league_code FROM team_league_cache
-                WHERE LOWER(team_name) LIKE ?
-                   OR LOWER(team_abbrev) = ?
-                   OR LOWER(team_short_name) LIKE ?
-            """, (f'%{team_lower}%', team_lower, f'%{team_lower}%'))
 
-            results = {row[0] for row in cursor.fetchall()}
+            # Try each variant
+            for variant in variants:
+                cursor.execute("""
+                    SELECT DISTINCT league_code FROM team_league_cache
+                    WHERE LOWER(team_name) LIKE ?
+                       OR LOWER(team_abbrev) = ?
+                       OR LOWER(team_short_name) LIKE ?
+                """, (f'%{variant}%', variant, f'%{variant}%'))
+                for row in cursor.fetchall():
+                    results.add(row[0])
 
-            # If no results and team has punctuation, try normalized search
-            if not results and team_normalized != team_lower:
+                if results:
+                    return results
+
+            # Fallback: Also try normalized search (strip ALL punctuation)
+            # This handles cases like "mount st mary's" matching "Mount St. Mary's"
+            import re
+            team_normalized = re.sub(r"[.'`]", '', team_name.lower().strip())
+
+            if team_normalized not in variants:
                 cursor.execute("""
                     SELECT DISTINCT league_code FROM team_league_cache
                     WHERE REPLACE(REPLACE(REPLACE(LOWER(team_name), '.', ''), '''', ''), '`', '') LIKE ?
@@ -175,7 +185,8 @@ class TeamLeagueCache:
         """
         Get full team info for all matches of a team name.
 
-        Handles punctuation differences (apostrophes, periods).
+        Handles punctuation differences (apostrophes, periods)
+        and common abbreviation variants (st/st., mt/mt., ft/ft.).
 
         Args:
             team_name: Team name to search
@@ -186,34 +197,43 @@ class TeamLeagueCache:
         if not team_name:
             return []
 
-        team_lower = team_name.lower().strip()
+        # Import here to avoid circular imports
+        from epg.league_detector import get_abbreviation_variants
 
-        # Also create a normalized version without punctuation for flexible matching
-        import re
-        team_normalized = re.sub(r"[.'`]", '', team_lower)
+        # Get all abbreviation variants (with/without periods in st/st., mt/mt., etc.)
+        variants = get_abbreviation_variants(team_name)
+        rows = []
 
         conn = get_connection()
         try:
             cursor = conn.cursor()
-            cursor.execute("""
-                SELECT espn_team_id, team_name, team_abbrev, team_short_name, sport, league_code
-                FROM team_league_cache
-                WHERE LOWER(team_name) LIKE ?
-                   OR LOWER(team_abbrev) = ?
-                   OR LOWER(team_short_name) LIKE ?
-            """, (f'%{team_lower}%', team_lower, f'%{team_lower}%'))
 
-            rows = cursor.fetchall()
-
-            # If no results and team has punctuation, try normalized search
-            if not rows and team_normalized != team_lower:
+            # Try each variant
+            for variant in variants:
                 cursor.execute("""
                     SELECT espn_team_id, team_name, team_abbrev, team_short_name, sport, league_code
                     FROM team_league_cache
-                    WHERE REPLACE(REPLACE(REPLACE(LOWER(team_name), '.', ''), '''', ''), '`', '') LIKE ?
-                       OR REPLACE(REPLACE(REPLACE(LOWER(team_short_name), '.', ''), '''', ''), '`', '') LIKE ?
-                """, (f'%{team_normalized}%', f'%{team_normalized}%'))
-                rows = cursor.fetchall()
+                    WHERE LOWER(team_name) LIKE ?
+                       OR LOWER(team_abbrev) = ?
+                       OR LOWER(team_short_name) LIKE ?
+                """, (f'%{variant}%', variant, f'%{variant}%'))
+                variant_rows = cursor.fetchall()
+                if variant_rows:
+                    rows.extend(variant_rows)
+                    break  # Found results, stop searching variants
+
+            # Fallback: try normalized search (strip ALL punctuation)
+            if not rows:
+                import re
+                team_normalized = re.sub(r"[.'`]", '', team_name.lower().strip())
+                if team_normalized not in variants:
+                    cursor.execute("""
+                        SELECT espn_team_id, team_name, team_abbrev, team_short_name, sport, league_code
+                        FROM team_league_cache
+                        WHERE REPLACE(REPLACE(REPLACE(LOWER(team_name), '.', ''), '''', ''), '`', '') LIKE ?
+                           OR REPLACE(REPLACE(REPLACE(LOWER(team_short_name), '.', ''), '''', ''), '`', '') LIKE ?
+                    """, (f'%{team_normalized}%', f'%{team_normalized}%'))
+                    rows = cursor.fetchall()
 
             # Group by team_id
             teams_by_id = {}

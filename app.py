@@ -333,6 +333,10 @@ def refresh_event_group_core(group, m3u_manager, skip_m3u_refresh=False, epg_sta
             else:
                 enabled_leagues = raw_leagues
 
+            # Normalize aliases to ESPN slugs (e.g., 'ncaawh' -> 'womens-college-hockey')
+            from database import normalize_league_codes
+            enabled_leagues = normalize_league_codes(enabled_leagues)
+
             if enabled_leagues or soccer_enabled:
                 app.logger.debug(f"Multi-sport mode enabled with leagues: {enabled_leagues}, soccer_enabled: {soccer_enabled}")
             else:
@@ -4224,6 +4228,10 @@ def api_event_epg_dispatcharr_streams_sse(group_id):
                         else:
                             enabled_leagues = raw_leagues
 
+                        # Normalize aliases to ESPN slugs (e.g., 'ncaawh' -> 'womens-college-hockey')
+                        from database import normalize_league_codes
+                        enabled_leagues = normalize_league_codes(enabled_leagues)
+
                     send_progress('progress', f'Matching {len(streams)} streams...', percent=50)
 
                     def match_single_stream_single(stream):
@@ -4482,6 +4490,9 @@ def api_event_epg_dispatcharr_streams_sse(group_id):
                         else:
                             team_result = match_data.get('team_result', {})
                             event_result = match_data.get('event_result')
+                            # Convert FilterReason constants to display text for team_match
+                            if team_result.get('reason'):
+                                team_result['reason'] = get_display_text(team_result['reason'])
                             stream['team_match'] = team_result
 
                             if event_result:
@@ -4508,7 +4519,10 @@ def api_event_epg_dispatcharr_streams_sse(group_id):
 
                                 stream['event_match'] = event_match_data
                             else:
-                                stream['event_match'] = {'found': False, 'reason': team_result.get('reason')}
+                                # Convert FilterReason constants to display text
+                                raw_reason = team_result.get('reason')
+                                display_reason = get_display_text(raw_reason) if raw_reason else 'No event found'
+                                stream['event_match'] = {'found': False, 'reason': display_reason}
 
                 # Sort streams alphabetically
                 streams.sort(key=lambda s: s.get('name', '').lower())

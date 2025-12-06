@@ -695,9 +695,10 @@ class EventMatcher:
 
             api_path = config['api_path']
             sport = config.get('sport', api_path.split('/')[0])
+            api_league = api_path.split('/')[-1] if '/' in api_path else league
 
             # Use scoreboard API to get the event (faster)
-            scoreboard = self.espn.get_scoreboard(api_path)
+            scoreboard = self.espn.get_scoreboard(sport, api_league)
             event = None
 
             if scoreboard:

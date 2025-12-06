@@ -195,10 +195,54 @@ class MultiSportMatcher:
                     detection_tier = tier
                     pre_found_event = pre_found  # May be None if single candidate or no game found
 
-            # If no match yet, provide diagnostic info
+            # Step 5: Tier 4 - Single-team schedule fallback (NAIA vs NCAA)
+            # This is critical for teams not in cache but discoverable via schedule
+            if not team_result or not team_result.get('matched'):
+                # Ensure datetime values have timezone for accurate comparison
+                from zoneinfo import ZoneInfo
+                tz_game_date = game_date
+                tz_game_time = game_time
+                if tz_game_date and not tz_game_date.tzinfo:
+                    tz_game_date = tz_game_date.replace(tzinfo=ZoneInfo('America/New_York'))
+                if tz_game_time and not tz_game_time.tzinfo:
+                    tz_game_time = tz_game_time.replace(tzinfo=ZoneInfo('America/New_York'))
+
+                # Try full detection which includes Tier 4 single-team fallback
+                detection_result = self.league_detector.detect(
+                    stream_name=stream_name,
+                    team1=raw_team1,
+                    team2=raw_team2,
+                    game_date=tz_game_date,
+                    game_time=tz_game_time
+                )
+
+                if detection_result.detected and detection_result.league:
+                    detected_league = detection_result.league
+                    detection_tier = detection_result.tier_detail
+
+                    # If Tier 4 found the event directly (has event_id), use that instead
+                    # of trying _extract_teams() which may produce incorrect fuzzy matches
+                    # (e.g., "calumet college" fuzzy-matching to "California Golden Bears")
+                    if detection_result.event_id:
+                        # Tier 4 already found the exact event - use it directly
+                        team_result = {
+                            'matched': True,
+                            'tier4_event_id': detection_result.event_id,
+                            'tier4_league': detected_league,
+                            'raw_away': raw_team1,
+                            'raw_home': raw_team2
+                        }
+                        logger.debug(f"Using Tier 4 event_id {detection_result.event_id} directly")
+                    else:
+                        # No event_id from Tier 4 - try to extract teams the normal way
+                        team_result = self._extract_teams(stream_name, detected_league)
+
+            # If still no match, provide diagnostic info
             if not team_result or not team_result.get('matched'):
                 if raw_team1 and raw_team2:
-                    diagnosis = self.league_detector.diagnose_team_match_failure(raw_team1, raw_team2)
+                    diagnosis = self.league_detector.diagnose_team_match_failure(
+                        raw_team1, raw_team2, stream_name=stream_name
+                    )
                     result.reason = diagnosis.get('reason')
                     result.detail = diagnosis.get('detail')
                     result.parsed_teams = {'team1': raw_team1, 'team2': raw_team2}
@@ -206,7 +250,7 @@ class MultiSportMatcher:
                     result.reason = 'NO_TEAMS'
                 return result
 
-            # Step 5: If still no league, try full detection (includes Tier 4)
+            # Step 6: If still no league but teams matched, try full detection
             if not detected_league:
                 league, tier = self._try_full_detection(stream_name, team_result)
                 if league:
@@ -222,40 +266,58 @@ class MultiSportMatcher:
                 result.reason = 'NO_LEAGUE_DETECTED'
                 return result
 
-            # Step 6: Find event in the detected league (with enrichment)
-            # Defensive check: ensure team_result has required keys
-            away_team_id = team_result.get('away_team_id') if team_result else None
-            home_team_id = team_result.get('home_team_id') if team_result else None
+            # Step 7: Find event in the detected league (with enrichment)
+            # Handle Tier 4 case where we have event_id directly (NAIA teams not in DB)
+            if team_result.get('tier4_event_id'):
+                # Tier 4 already found the event - fetch it by ID
+                event_id = team_result['tier4_event_id']
+                logger.debug(f"Using Tier 4 event_id {event_id} for '{stream_name[:40]}...'")
 
-            if not away_team_id or not home_team_id:
-                logger.warning(f"Missing team IDs: away={away_team_id}, home={home_team_id} for stream '{stream_name}'")
-                result.reason = 'MISSING_TEAM_IDS'
-                return result
-
-            # Optimization: If disambiguation already found the event, enrich it instead
-            # of calling find_and_enrich() which would re-fetch the same event
-            if pre_found_event and pre_found_event.get('found'):
-                # Event already found during disambiguation - just enrich it
-                event_result = pre_found_event
-                if self.event_matcher.enricher and event_result.get('event'):
-                    event_result['event'] = self.event_matcher.enricher.enrich_event(
-                        event_result['event'],
-                        detected_league,
-                        include_scoreboard=True,
-                        include_team_stats=True
-                    )
-                logger.debug(f"Using pre-found event from disambiguation for '{stream_name[:40]}...'")
-            else:
-                # No pre-found event - fetch and enrich
-                event_result = self.event_matcher.find_and_enrich(
-                    away_team_id,
-                    home_team_id,
-                    detected_league,
-                    game_date=team_result.get('game_date'),
-                    game_time=team_result.get('game_time'),
-                    include_final_events=self.config.include_final_events,
-                    api_path_override=detected_api_path_override
+                # Get the event via event summary API
+                # Note: get_event_by_id returns the event dict directly (already enriched), not wrapped
+                event = self.event_matcher.get_event_by_id(
+                    event_id, detected_league
                 )
+
+                if event and event.get('id'):
+                    # Successfully got the event - wrap it in expected format
+                    event_result = {'found': True, 'event': event, 'event_id': event.get('id')}
+                else:
+                    event_result = {'found': False, 'reason': f'Tier 4 event {event_id} not found'}
+            else:
+                # Normal flow - need team IDs
+                away_team_id = team_result.get('away_team_id') if team_result else None
+                home_team_id = team_result.get('home_team_id') if team_result else None
+
+                if not away_team_id or not home_team_id:
+                    logger.warning(f"Missing team IDs: away={away_team_id}, home={home_team_id} for stream '{stream_name}'")
+                    result.reason = 'MISSING_TEAM_IDS'
+                    return result
+
+                # Optimization: If disambiguation already found the event, enrich it instead
+                # of calling find_and_enrich() which would re-fetch the same event
+                if pre_found_event and pre_found_event.get('found'):
+                    # Event already found during disambiguation - just enrich it
+                    event_result = pre_found_event
+                    if self.event_matcher.enricher and event_result.get('event'):
+                        event_result['event'] = self.event_matcher.enricher.enrich_event(
+                            event_result['event'],
+                            detected_league,
+                            include_scoreboard=True,
+                            include_team_stats=True
+                        )
+                    logger.debug(f"Using pre-found event from disambiguation for '{stream_name[:40]}...'")
+                else:
+                    # No pre-found event - fetch and enrich
+                    event_result = self.event_matcher.find_and_enrich(
+                        away_team_id,
+                        home_team_id,
+                        detected_league,
+                        game_date=team_result.get('game_date'),
+                        game_time=team_result.get('game_time'),
+                        include_final_events=self.config.include_final_events,
+                        api_path_override=detected_api_path_override
+                    )
 
             # Defensive check: ensure event_result is a dict
             if event_result is None:
@@ -516,10 +578,19 @@ class MultiSportMatcher:
         detected_league: str, api_path_override: str
     ) -> tuple:
         """Try alternate team combinations for ambiguous team names."""
+        # Skip disambiguation for Tier 4 matches - they don't have team IDs
+        # and we already have the exact event from schedule search
+        if team_result.get('tier4_event_id'):
+            return {'found': False}, team_result
+
         raw_away = team_result.get('raw_away', '') or raw_team1
         raw_home = team_result.get('raw_home', '') or raw_team2
 
         if not (raw_away and raw_home):
+            return {'found': False}, team_result
+
+        # Need team IDs for disambiguation
+        if not team_result.get('away_team_id') or not team_result.get('home_team_id'):
             return {'found': False}, team_result
 
         # Get all teams matching each raw name

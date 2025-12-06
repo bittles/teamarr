@@ -491,6 +491,7 @@ def refresh_event_group_core(group, m3u_manager, skip_m3u_refresh=False, epg_sta
                 team_result = None
                 detected_league = None
                 detected_api_path_override = None  # For unmapped soccer leagues
+                detection_tier = None  # Track which tier succeeded
 
                 # Step 2: Tier 1 - If league indicator found, try that league directly
                 if indicator_league and indicator_league in (enabled_leagues + (['soccer'] if soccer_enabled else [])):
@@ -506,6 +507,7 @@ def refresh_event_group_core(group, m3u_manager, skip_m3u_refresh=False, epg_sta
 
                     if team_result.get('matched'):
                         detected_league = indicator_league
+                        detection_tier = '1'
 
                 # Step 3: Tier 2 - If sport indicator found, try leagues within that sport
                 if (not team_result or not team_result.get('matched')) and indicator_sport:
@@ -533,6 +535,7 @@ def refresh_event_group_core(group, m3u_manager, skip_m3u_refresh=False, epg_sta
                         if candidate.get('matched'):
                             team_result = candidate
                             detected_league = league
+                            detection_tier = '2'
                             break
 
                 # Step 4: Tier 3 - Use caches to find candidate leagues from team names
@@ -585,6 +588,7 @@ def refresh_event_group_core(group, m3u_manager, skip_m3u_refresh=False, epg_sta
                     # If only one match, use it directly
                     if len(matched_candidates) == 1:
                         detected_league, team_result, _ = matched_candidates[0]
+                        detection_tier = '3c'  # Single candidate, no disambiguation needed
                     elif len(matched_candidates) > 1:
                         # Multiple leagues have these teams - check ALL for games
                         # Then pick the one with the best time match (Tier 3 disambiguation)
@@ -625,10 +629,18 @@ def refresh_event_group_core(group, m3u_manager, skip_m3u_refresh=False, epg_sta
                         if len(leagues_with_games) == 1:
                             # Only one league has a game - use it
                             detected_league, team_result, _, _ = leagues_with_games[0]
+                            detection_tier = '3c'  # Single game found across candidates
                         elif len(leagues_with_games) > 1:
                             # Multiple leagues have games - pick best time match
                             leagues_with_games.sort(key=lambda x: x[3])  # Sort by time_diff
                             detected_league, team_result, _, _ = leagues_with_games[0]
+                            # Determine tier based on what data was used for disambiguation
+                            if game_date and game_time:
+                                detection_tier = '3a'  # Date + time disambiguation
+                            elif game_time:
+                                detection_tier = '3b'  # Time-only disambiguation
+                            else:
+                                detection_tier = '3c'  # Closest game
                             logger.debug(f"Multi-league disambiguation: {len(leagues_with_games)} leagues have games, "
                                        f"selected {detected_league} (time_diff={leagues_with_games[0][3]} mins)")
 
@@ -636,10 +648,12 @@ def refresh_event_group_core(group, m3u_manager, skip_m3u_refresh=False, epg_sta
                         # This ensures we return "game final" instead of "no game in lookahead"
                         if not detected_league and leagues_with_final_games:
                             detected_league, team_result, _ = leagues_with_final_games[0]
+                            detection_tier = '3c'  # Final game found
                         # If no game found in any league, fall back to first match
                         elif not detected_league and matched_candidates:
                             detected_league, team_result, api_override = matched_candidates[0]
                             detected_api_path_override = api_override
+                            detection_tier = '3c'  # Fallback to first candidate
 
                         # For soccer leagues detected via cache, check if we need api_path_override
                         # by looking back at the matched_candidates
@@ -679,6 +693,7 @@ def refresh_event_group_core(group, m3u_manager, skip_m3u_refresh=False, epg_sta
 
                     if full_detection.detected:
                         detected_league = full_detection.league
+                        detection_tier = full_detection.tier_detail or str(full_detection.tier)
                         # Re-extract teams with the detected league if different
                         if detected_league != team_result.get('league'):
                             if any_custom_enabled:
@@ -790,12 +805,17 @@ def refresh_event_group_core(group, m3u_manager, skip_m3u_refresh=False, epg_sta
                     # Store detected league in the result for channel creation
                     team_result['detected_league'] = detected_league
 
+                    # Log tier for debugging multi-league detection
+                    if detection_tier:
+                        logger.debug(f"[TIER {detection_tier}] {stream['name'][:50]}... → {detected_league.upper()}")
+
                     return {
                         'type': 'matched',
                         'stream': stream,
                         'teams': team_result,
                         'event': event,
-                        'detected_league': detected_league
+                        'detected_league': detected_league,
+                        'detection_tier': detection_tier
                     }
                 else:
                     reason = event_result.get('reason', '')

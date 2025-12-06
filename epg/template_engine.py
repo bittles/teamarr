@@ -674,9 +674,11 @@ class TemplateEngine:
         odds_list = competition.get('odds', [])
         if odds_list and len(odds_list) > 0:
             odds = odds_list[0]  # Use first odds provider (usually ESPN BET)
+            if not odds:
+                odds = {}  # Handle None entries in odds list
 
             # Provider info
-            provider = odds.get('provider', {})
+            provider = odds.get('provider', {}) or {}
             variables['odds_provider'] = provider.get('name', '')
 
             # Over/Under

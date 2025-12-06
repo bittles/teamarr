@@ -1338,7 +1338,8 @@ class ChannelManager:
     def find_epg_data_by_tvg_id(
         self,
         tvg_id: str,
-        epg_source_id: int = None
+        epg_source_id: int = None,
+        epg_lookup: Dict[str, Dict] = None
     ) -> Optional[Dict]:
         """
         Find EPGData by tvg_id, optionally filtered by EPG source.
@@ -1349,10 +1350,18 @@ class ChannelManager:
         Args:
             tvg_id: The tvg_id to search for (e.g., "teamarr-event-401547679")
             epg_source_id: Optional EPG source ID to filter by
+            epg_lookup: Optional pre-built dict of tvg_id -> epg_data for batch lookups.
+                        If provided, uses this instead of fetching the EPG data list.
+                        Build with build_epg_lookup() for efficiency.
 
         Returns:
             EPGData dict if found, None otherwise
         """
+        # Use pre-built lookup if provided (batch optimization)
+        if epg_lookup is not None:
+            return epg_lookup.get(tvg_id)
+
+        # Otherwise fetch and search (single lookup fallback)
         epg_data_list = self.get_epg_data_list(epg_source_id)
 
         for epg_data in epg_data_list:
@@ -1360,6 +1369,22 @@ class ChannelManager:
                 return epg_data
 
         return None
+
+    def build_epg_lookup(self, epg_source_id: int = None) -> Dict[str, Dict]:
+        """
+        Build a tvg_id -> epg_data lookup dict for efficient batch lookups.
+
+        Fetches the EPG data list once and returns a dict for O(1) lookups.
+        Use this when you need to look up multiple tvg_ids.
+
+        Args:
+            epg_source_id: Optional EPG source ID to filter by
+
+        Returns:
+            Dict mapping tvg_id -> epg_data dict
+        """
+        epg_data_list = self.get_epg_data_list(epg_source_id)
+        return {e.get('tvg_id'): e for e in epg_data_list if e.get('tvg_id')}
 
     def upload_logo(self, name: str, url: str) -> Dict[str, Any]:
         """

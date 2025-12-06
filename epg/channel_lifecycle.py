@@ -2316,6 +2316,12 @@ class ChannelLifecycleManager:
 
         logger.info(f"Associating EPG with {len(channels)} managed channels...")
 
+        # Build EPG lookup dict ONCE instead of fetching for each channel
+        # This avoids fetching the 2.3MB EPG data list for every channel
+        logger.debug("Building EPG lookup dict for batch association...")
+        epg_lookup = self.channel_api.build_epg_lookup(epg_source_id=self.epg_data_id)
+        logger.debug(f"EPG lookup built with {len(epg_lookup)} entries")
+
         for channel in channels:
             tvg_id = channel.get('tvg_id')
             dispatcharr_channel_id = channel.get('dispatcharr_channel_id')
@@ -2335,22 +2341,19 @@ class ChannelLifecycleManager:
                     })
                     continue
 
+            # Look up EPGData by tvg_id using pre-built lookup (O(1) instead of O(n))
+            epg_data = epg_lookup.get(tvg_id)
+
+            if not epg_data:
+                results['skipped'].append({
+                    'channel_name': channel_name,
+                    'tvg_id': tvg_id,
+                    'reason': f'EPGData not found for tvg_id={tvg_id}'
+                })
+                continue
+
             # Serialize Dispatcharr operations to prevent race conditions
             with self._dispatcharr_lock:
-                # Look up EPGData by tvg_id in the Teamarr EPG source
-                epg_data = self.channel_api.find_epg_data_by_tvg_id(
-                    tvg_id,
-                    epg_source_id=self.epg_data_id
-                )
-
-                if not epg_data:
-                    results['skipped'].append({
-                        'channel_name': channel_name,
-                        'tvg_id': tvg_id,
-                        'reason': f'EPGData not found for tvg_id={tvg_id}'
-                    })
-                    continue
-
                 # Associate EPG with channel
                 epg_data_id = epg_data['id']
                 epg_result = self.channel_api.set_channel_epg(

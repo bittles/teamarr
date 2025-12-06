@@ -987,6 +987,11 @@ function renderPreviewStreams(streams, totalCount, filteredCount, customRegexInf
             teamHtml = `<span class="text-muted" style="font-style: italic;">Filtered</span>`;
         } else if (teamMatch.matched) {
             teamHtml = `<span class="text-success">${escapeHtml(teamMatch.away_team_name?.split(' ').pop() || '?')} @ ${escapeHtml(teamMatch.home_team_name?.split(' ').pop() || '?')}</span>`;
+        } else if (teamMatch.parsed_teams) {
+            // Teams were parsed but not found in ESPN - show what was parsed
+            const t1 = teamMatch.parsed_teams.team1 || '?';
+            const t2 = teamMatch.parsed_teams.team2 || '?';
+            teamHtml = `<span class="text-muted" title="Parsed but not found in ESPN">${escapeHtml(t1)} vs ${escapeHtml(t2)}</span>`;
         } else {
             teamHtml = `<span class="text-muted">—</span>`;
         }
@@ -1006,8 +1011,15 @@ function renderPreviewStreams(streams, totalCount, filteredCount, customRegexInf
             // Today's event but final - excluded by user setting
             statusHtml = `<span class="text-danger" style="font-weight: 600;">Event is final (excluded)</span>`;
         } else if (!teamMatch.matched) {
-            // Team parsing failed
-            statusHtml = `<span class="text-warning">Teams not parsed</span>`;
+            // Team parsing failed or teams not found in ESPN
+            const detail = teamMatch.detail || 'Teams not parsed';
+            const parsedTeams = teamMatch.parsed_teams;
+            if (parsedTeams) {
+                // Teams were parsed but not found in ESPN database
+                statusHtml = `<span class="text-warning" title="${escapeHtml(detail)}">${escapeHtml(detail)}</span>`;
+            } else {
+                statusHtml = `<span class="text-warning">Teams not parsed</span>`;
+            }
         } else {
             // Teams parsed but no event found
             const reason = eventMatch.reason || 'No event found';

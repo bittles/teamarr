@@ -64,6 +64,12 @@ class FilterReason:
     # Could not parse team names from stream
     TEAMS_NOT_PARSED = 'teams_not_parsed'
 
+    # Teams parsed but one or both not found in any ESPN league
+    TEAMS_NOT_IN_ESPN = 'teams_not_in_espn'
+
+    # Teams parsed but no common league found (each team in different leagues)
+    NO_COMMON_LEAGUE = 'no_common_league'
+
 
 # Display text for user-facing UI (preview modal, etc.)
 DISPLAY_TEXT = {
@@ -75,6 +81,8 @@ DISPLAY_TEXT = {
     FilterReason.NO_GAME_FOUND: 'No event found',
     FilterReason.OUTSIDE_LOOKAHEAD: 'Outside lookahead range',
     FilterReason.TEAMS_NOT_PARSED: 'Teams not parsed',
+    FilterReason.TEAMS_NOT_IN_ESPN: 'Team(s) not in ESPN database',
+    FilterReason.NO_COMMON_LEAGUE: 'No common league for teams',
 }
 
 # Internal reasons (used by event_matcher.py for backwards compatibility)

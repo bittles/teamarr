@@ -347,7 +347,18 @@ class MultiSportMatcher:
                     logger.debug(f"[TIER {detection_tier}] {stream_name[:50]}... → {detected_league.upper()}")
 
                 # Check if detected league is enabled
-                if not self.league_detector.is_league_enabled(detected_league):
+                # For professional soccer leagues, also check soccer_enabled flag (enables all pro soccer)
+                # Note: NCAA soccer (usa.ncaa.m.1, usa.ncaa.w.1) is in league_config, not covered by soccer_enabled
+                from epg.league_config import is_soccer_league
+                league_enabled = self.league_detector.is_league_enabled(detected_league)
+                if not league_enabled and self.config.soccer_enabled:
+                    # soccer_enabled covers all pro soccer leagues (from soccer cache)
+                    # but NOT NCAA soccer which is controlled separately via league_config
+                    is_ncaa_soccer = 'ncaa' in detected_league.lower()
+                    if is_soccer_league(detected_league) and not is_ncaa_soccer:
+                        league_enabled = True
+
+                if not league_enabled:
                     # League not enabled - return helpful message
                     from utils.filter_reasons import FilterReason
                     league_name = self.league_detector.get_league_name(detected_league)

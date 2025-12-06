@@ -490,6 +490,7 @@ def refresh_event_group_core(group, m3u_manager, skip_m3u_refresh=False, epg_sta
 
                 team_result = None
                 detected_league = None
+                detected_api_path_override = None  # For unmapped soccer leagues
 
                 # Step 2: Tier 1 - If league indicator found, try that league directly
                 if indicator_league and indicator_league in (enabled_leagues + (['soccer'] if soccer_enabled else [])):
@@ -542,18 +543,30 @@ def refresh_event_group_core(group, m3u_manager, skip_m3u_refresh=False, epg_sta
                     # Filter to enabled leagues
                     candidate_leagues = [l for l in candidate_leagues if l in enabled_leagues]
 
-                    # Also check soccer cache if enabled
-                    if soccer_enabled:
-                        soccer_slugs = thread_league_detector._find_soccer_leagues_for_teams(raw_team1, raw_team2)
-                        # Map ESPN slugs (esp.1) to league_config codes (laliga)
-                        from database import get_soccer_slug_mapping
-                        slug_to_code = get_soccer_slug_mapping()
-                        soccer_codes = [slug_to_code.get(slug) for slug in soccer_slugs[:10] if slug in slug_to_code]
-                        candidate_leagues.extend(soccer_codes)
-
-                    # Try each candidate league - collect all matches first
-                    # Then disambiguate by checking which has an actual game in the window
+                    # Collect all matched candidates for disambiguation
                     matched_candidates = []
+
+                    # Also check soccer cache if enabled
+                    # Use helper that returns league-specific team IDs for each candidate
+                    if soccer_enabled:
+                        soccer_candidates = thread_league_detector.get_soccer_candidates_with_team_ids(raw_team1, raw_team2)
+                        for sc in soccer_candidates:
+                            # Build candidate dict similar to extract_teams result
+                            candidate = {
+                                'matched': True,
+                                'away_team_id': sc['team1_id'],
+                                'away_team_name': sc['team1_name'],
+                                'home_team_id': sc['team2_id'],
+                                'home_team_name': sc['team2_name'],
+                                'game_date': None,
+                                'game_time': None,
+                                'league': sc['league_code'] or sc['league_slug']
+                            }
+                            # Use league_code if mapped, else slug with api_path_override
+                            league_key = sc['league_code'] or sc['league_slug']
+                            matched_candidates.append((league_key, candidate, sc['api_path_override']))
+
+                    # Try each non-soccer candidate league
                     for league in candidate_leagues:
                         if any_custom_enabled:
                             candidate = thread_team_matcher.extract_teams_with_selective_regex(
@@ -566,24 +579,25 @@ def refresh_event_group_core(group, m3u_manager, skip_m3u_refresh=False, epg_sta
                             candidate = thread_team_matcher.extract_teams(stream['name'], league)
 
                         if candidate.get('matched'):
-                            matched_candidates.append((league, candidate))
+                            matched_candidates.append((league, candidate, None))  # None = no api_path_override
 
                     # If only one match, use it directly
                     if len(matched_candidates) == 1:
-                        detected_league, team_result = matched_candidates[0]
+                        detected_league, team_result, _ = matched_candidates[0]
                     elif len(matched_candidates) > 1:
                         # Multiple leagues have these teams - check ALL for games
                         # Then pick the one with the best time match (Tier 3 disambiguation)
                         leagues_with_games = []
                         leagues_with_final_games = []  # Track leagues that have final/past games
-                        for league, candidate in matched_candidates:
+                        for league, candidate, api_path_override in matched_candidates:
                             test_result = thread_event_matcher.find_event(
                                 candidate['away_team_id'],
                                 candidate['home_team_id'],
                                 league,
                                 game_date=candidate.get('game_date'),
                                 game_time=candidate.get('game_time'),
-                                include_final_events=include_final_events
+                                include_final_events=include_final_events,
+                                api_path_override=api_path_override
                             )
                             if test_result.get('found'):
                                 # Calculate time difference if we have target time
@@ -623,9 +637,29 @@ def refresh_event_group_core(group, m3u_manager, skip_m3u_refresh=False, epg_sta
                             detected_league, team_result, _ = leagues_with_final_games[0]
                         # If no game found in any league, fall back to first match
                         elif not detected_league and matched_candidates:
-                            detected_league, team_result = matched_candidates[0]
+                            detected_league, team_result, api_override = matched_candidates[0]
+                            detected_api_path_override = api_override
+
+                        # For soccer leagues detected via cache, check if we need api_path_override
+                        # by looking back at the matched_candidates
+                        if detected_league and not detected_api_path_override:
+                            for league_key, candidate, api_override in matched_candidates:
+                                if league_key == detected_league and api_override:
+                                    detected_api_path_override = api_override
+                                    break
 
                 if not team_result or not team_result.get('matched'):
+                    # Provide diagnostic info about why teams couldn't be matched
+                    # Only if raw extraction succeeded (teams were parsed but not found in ESPN)
+                    if raw_team1 and raw_team2:
+                        diagnosis = thread_league_detector.diagnose_team_match_failure(raw_team1, raw_team2)
+                        return {
+                            'type': 'no_teams',
+                            'stream': stream,
+                            'reason': diagnosis.get('reason'),
+                            'detail': diagnosis.get('detail'),
+                            'parsed_teams': {'team1': raw_team1, 'team2': raw_team2}
+                        }
                     return {'type': 'no_teams', 'stream': stream}
 
                 # Step 5: If multiple candidate leagues, use schedule disambiguation (Tier 3a/3b/3c)
@@ -675,7 +709,8 @@ def refresh_event_group_core(group, m3u_manager, skip_m3u_refresh=False, epg_sta
                     detected_league,
                     game_date=team_result.get('game_date'),
                     game_time=team_result.get('game_time'),
-                    include_final_events=include_final_events
+                    include_final_events=include_final_events,
+                    api_path_override=detected_api_path_override
                 )
 
                 # If no game found, try alternate team combinations (disambiguation)
@@ -705,7 +740,8 @@ def refresh_event_group_core(group, m3u_manager, skip_m3u_refresh=False, epg_sta
                                     detected_league,
                                     game_date=team_result.get('game_date'),
                                     game_time=team_result.get('game_time'),
-                                    include_final_events=include_final_events
+                                    include_final_events=include_final_events,
+                                    api_path_override=detected_api_path_override
                                 )
 
                                 if alt_result.get('found'):
@@ -4642,6 +4678,7 @@ def api_event_epg_dispatcharr_streams_sse(group_id):
 
                             team_result = None
                             detected_league = None
+                            detected_api_path_override = None  # For unmapped soccer leagues
 
                             # Step 2: Tier 1 - If league indicator found, try that league directly
                             if indicator_league and indicator_league in (enabled_leagues + (['soccer'] if soccer_enabled else [])):
@@ -4693,17 +4730,31 @@ def api_event_epg_dispatcharr_streams_sse(group_id):
                                 # Filter to enabled leagues
                                 candidate_leagues = [l for l in candidate_leagues if l in enabled_leagues]
 
-                                # Also check soccer cache if enabled
-                                if soccer_enabled:
-                                    soccer_slugs = thread_league_detector._find_soccer_leagues_for_teams(raw_team1, raw_team2)
-                                    # Map ESPN slugs (esp.1) to league_config codes (laliga)
-                                    slug_to_code = get_soccer_slug_mapping()
-                                    soccer_codes = [slug_to_code.get(slug) for slug in soccer_slugs[:10] if slug in slug_to_code]
-                                    candidate_leagues.extend(soccer_codes)
-
                                 # Try each candidate league - collect all matches first
                                 # Then disambiguate by checking which has an actual game in the window
                                 matched_candidates = []
+
+                                # Also check soccer cache if enabled
+                                # Use helper that returns league-specific team IDs for each candidate
+                                if soccer_enabled:
+                                    soccer_candidates = thread_league_detector.get_soccer_candidates_with_team_ids(raw_team1, raw_team2)
+                                    for sc in soccer_candidates:
+                                        # Build candidate dict similar to extract_teams result
+                                        candidate = {
+                                            'matched': True,
+                                            'away_team_id': sc['team1_id'],
+                                            'away_team_name': sc['team1_name'],
+                                            'home_team_id': sc['team2_id'],
+                                            'home_team_name': sc['team2_name'],
+                                            'game_date': None,
+                                            'game_time': None,
+                                            'league': sc['league_code'] or sc['league_slug']
+                                        }
+                                        # Use league_code if mapped, else slug with api_path_override
+                                        league_key = sc['league_code'] or sc['league_slug']
+                                        matched_candidates.append((league_key, candidate, sc['api_path_override']))
+
+                                # Try each non-soccer candidate league
                                 for try_league in candidate_leagues:
                                     if any_custom_enabled:
                                         candidate = thread_team_matcher.extract_teams_with_selective_regex(
@@ -4716,24 +4767,25 @@ def api_event_epg_dispatcharr_streams_sse(group_id):
                                         candidate = thread_team_matcher.extract_teams(stream_name, try_league)
 
                                     if candidate.get('matched'):
-                                        matched_candidates.append((try_league, candidate))
+                                        matched_candidates.append((try_league, candidate, None))  # None = no api_path_override
 
                                 # If only one match, use it directly
                                 if len(matched_candidates) == 1:
-                                    detected_league, team_result = matched_candidates[0]
+                                    detected_league, team_result, _ = matched_candidates[0]
                                 elif len(matched_candidates) > 1:
                                     # Multiple leagues have these teams - check ALL for games
                                     # Then pick the one with the best time match (Tier 3 disambiguation)
                                     leagues_with_games = []
                                     leagues_with_final_games = []  # Track leagues that have final/past games
-                                    for try_league, candidate in matched_candidates:
+                                    for try_league, candidate, api_path_override in matched_candidates:
                                         test_result = thread_event_matcher.find_event(
                                             candidate['away_team_id'],
                                             candidate['home_team_id'],
                                             try_league,
                                             game_date=candidate.get('game_date'),
                                             game_time=candidate.get('game_time'),
-                                            include_final_events=include_final_events
+                                            include_final_events=include_final_events,
+                                            api_path_override=api_path_override
                                         )
                                         if test_result.get('found'):
                                             # Calculate time difference if we have target time
@@ -4773,9 +4825,30 @@ def api_event_epg_dispatcharr_streams_sse(group_id):
                                         detected_league, team_result, _ = leagues_with_final_games[0]
                                     # If no game found in any league, fall back to first match
                                     elif not detected_league and matched_candidates:
-                                        detected_league, team_result = matched_candidates[0]
+                                        detected_league, team_result, api_override = matched_candidates[0]
+                                        detected_api_path_override = api_override
+
+                                    # For soccer leagues detected via cache, check if we need api_path_override
+                                    if detected_league and not detected_api_path_override:
+                                        for league_key, candidate, api_override in matched_candidates:
+                                            if league_key == detected_league and api_override:
+                                                detected_api_path_override = api_override
+                                                break
 
                             if not team_result or not team_result.get('matched'):
+                                # Provide diagnostic info about why teams couldn't be matched
+                                if raw_team1 and raw_team2:
+                                    diagnosis = thread_league_detector.diagnose_team_match_failure(raw_team1, raw_team2)
+                                    return {
+                                        'stream': stream,
+                                        'team_result': {
+                                            'matched': False,
+                                            'reason': diagnosis.get('reason'),
+                                            'detail': diagnosis.get('detail'),
+                                            'parsed_teams': {'team1': raw_team1, 'team2': raw_team2}
+                                        },
+                                        'event_result': None
+                                    }
                                 return {
                                     'stream': stream,
                                     'team_result': {'matched': False, 'reason': 'NO_TEAMS'},
@@ -4799,7 +4872,8 @@ def api_event_epg_dispatcharr_streams_sse(group_id):
                                 detected_league,
                                 game_date=team_result.get('game_date'),
                                 game_time=team_result.get('game_time'),
-                                include_final_events=include_final_events
+                                include_final_events=include_final_events,
+                                api_path_override=detected_api_path_override
                             )
 
                             # If no game found, try alternate team combinations (disambiguation)
@@ -4826,7 +4900,8 @@ def api_event_epg_dispatcharr_streams_sse(group_id):
                                                 detected_league,
                                                 game_date=team_result.get('game_date'),
                                                 game_time=team_result.get('game_time'),
-                                                include_final_events=include_final_events
+                                                include_final_events=include_final_events,
+                                                api_path_override=detected_api_path_override
                                             )
 
                                             if alt_result.get('found'):

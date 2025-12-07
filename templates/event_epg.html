@@ -121,9 +121,19 @@
                 </div>
             </div>
 
-            <div class="stat-tile stat-tile-matched">
+            <div class="stat-tile stat-tile-matched" data-tooltip-id="tooltip-matched">
                 <div class="stat-value">{{ stats.matched_streams }}</div>
                 <div class="stat-label">Matched ({{ stats.match_rate }}%)</div>
+                <div class="stat-tooltip" id="tooltip-matched">
+                    <div class="tooltip-title">Match Rate by Group</div>
+                    {% for group in groups if (group.stream_count or 0) > 0 %}
+                    {% set group_rate = ((group.matched_count or 0) / group.stream_count * 100)|round|int if group.stream_count else 0 %}
+                    <div class="tooltip-row">
+                        <span class="tooltip-name">{{ group.group_name|truncate(20) }}</span>
+                        <span class="tooltip-value">{{ group.matched_count or 0 }}/{{ group.stream_count }} ({{ group_rate }}%)</span>
+                    </div>
+                    {% endfor %}
+                </div>
             </div>
         </div>
 

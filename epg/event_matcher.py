@@ -221,10 +221,13 @@ class EventMatcher:
                     # is still considered "Dec 6" for a user in EST
                     event_in_user_tz = event_date.astimezone(user_tz)
                     event_day = event_in_user_tz.date()
+
+                    # Past day events (in user TZ) are ALWAYS excluded
                     if event_day < today:
                         skip_reason = 'past_game'  # Game from a previous day
                         logger.debug(f"[TRACE]   Event {event_id} ({event_name}) - skipped: past completed game ({event_day})")
                         continue
+                    # Same day finals: honor the include_final_events setting
                     elif event_day == today and not include_final_events:
                         skip_reason = 'today_final'  # Today's game, but finals excluded
                         logger.debug(f"[TRACE]   Event {event_id} ({event_name}) - skipped: today's final (excluded)")
@@ -387,7 +390,10 @@ class EventMatcher:
         candidate_events = []
 
         # Search scoreboard for each day in the lookahead window
-        for day_offset in range(self.lookahead_days):
+        # Start from -1 (yesterday) to handle timezone edge cases where games
+        # listed for Dec 6 in user's local time are Dec 6 in ESPN scoreboard
+        # but current UTC date is already Dec 7
+        for day_offset in range(-1, self.lookahead_days):
             check_date = now_utc + timedelta(days=day_offset)
             date_str = check_date.strftime('%Y%m%d')
 

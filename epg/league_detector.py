@@ -109,6 +109,25 @@ def get_abbreviation_variants(name: str) -> List[str]:
         )
     variants.add(without_period)
 
+    # German club name abbreviation patterns
+    # "Sport-Club Freiburg" -> "SC Freiburg", "Sportverein Werder" -> "SV Werder"
+    german_expansions = [
+        (r'\bsport[\-\s]*club\b', 'sc'),           # Sport-Club -> SC
+        (r'\bsportverein\b', 'sv'),                 # Sportverein -> SV
+        (r'\bfussball[\-\s]*club\b', 'fc'),        # Fussball-Club -> FC
+        (r'\bfußball[\-\s]*club\b', 'fc'),         # Fußball-Club -> FC
+        (r'\bturn[\-\s]*und[\-\s]*sportverein\b', 'tsv'),  # Turn- und Sportverein -> TSV
+        (r'\bballspielverein\b', 'bv'),            # Ballspielverein -> BV
+        (r'\bborussia\b', 'bor'),                   # Borussia -> Bor (sometimes used)
+    ]
+    for pattern, abbrev in german_expansions:
+        abbreviated = re.sub(pattern, abbrev, name_lower, flags=re.IGNORECASE)
+        if abbreviated != name_lower:
+            # Also remove hyphens/dashes that might remain
+            abbreviated = re.sub(r'[\-]+', ' ', abbreviated)
+            abbreviated = re.sub(r'\s+', ' ', abbreviated).strip()
+            variants.add(abbreviated)
+
     # Return unique variants (filter out duplicates)
     return list(variants)
 
@@ -885,13 +904,14 @@ class LeagueDetector:
                 team_normalized = normalize_team_name(team_lower, strip_articles=True)
 
                 # Tier 1: Direct match with abbreviation variants (st/st., mt/mt.)
+                # IMPORTANT: INSTR checks require LENGTH >= 6 to avoid "Sport", "Port" false positives
                 for variant in get_abbreviation_variants(team_name):
                     cursor.execute("""
                         SELECT espn_team_id, team_name FROM soccer_team_leagues
                         WHERE league_slug = ? AND (
                             LOWER(team_name) LIKE ?
                             OR LOWER(team_name) LIKE ?
-                            OR INSTR(?, LOWER(team_name)) > 0
+                            OR (INSTR(?, LOWER(team_name)) > 0 AND LENGTH(team_name) >= 6)
                         )
                         ORDER BY LENGTH(team_name) ASC
                         LIMIT 1
@@ -1097,18 +1117,19 @@ class LeagueDetector:
 
             # Build dynamic query for all team1 variants
             # Each variant gets a LIKE clause in both soccer and US sports caches
+            # IMPORTANT: INSTR checks require LENGTH >= 6 to avoid "Sport", "Port" false positives
             team1_leagues = set()
             for variant in team1_variants:
                 cursor.execute("""
                     SELECT DISTINCT league_slug, team_name FROM soccer_team_leagues
                     WHERE LOWER(team_name) LIKE ?
-                       OR INSTR(?, LOWER(team_name)) > 0
+                       OR (INSTR(?, LOWER(team_name)) > 0 AND LENGTH(team_name) >= 6)
                     UNION
                     SELECT DISTINCT league_code, team_name FROM team_league_cache
                     WHERE LOWER(team_name) LIKE ?
                        OR LOWER(team_short_name) LIKE ?
-                       OR INSTR(?, LOWER(team_name)) > 0
-                       OR INSTR(?, LOWER(team_short_name)) > 0
+                       OR (INSTR(?, LOWER(team_name)) > 0 AND LENGTH(team_name) >= 6)
+                       OR (INSTR(?, LOWER(team_short_name)) > 0 AND LENGTH(team_short_name) >= 6)
                 """, (f"%{variant}%", variant, f"%{variant}%", f"%{variant}%", variant, variant))
                 for row in cursor.fetchall():
                     team1_leagues.add(row[0])
@@ -1116,18 +1137,19 @@ class LeagueDetector:
             team1_found = len(team1_leagues) > 0
 
             # Build dynamic query for all team2 variants
+            # IMPORTANT: INSTR checks require LENGTH >= 6 to avoid "Sport", "Port" false positives
             team2_leagues = set()
             for variant in team2_variants:
                 cursor.execute("""
                     SELECT DISTINCT league_slug, team_name FROM soccer_team_leagues
                     WHERE LOWER(team_name) LIKE ?
-                       OR INSTR(?, LOWER(team_name)) > 0
+                       OR (INSTR(?, LOWER(team_name)) > 0 AND LENGTH(team_name) >= 6)
                     UNION
                     SELECT DISTINCT league_code, team_name FROM team_league_cache
                     WHERE LOWER(team_name) LIKE ?
                        OR LOWER(team_short_name) LIKE ?
-                       OR INSTR(?, LOWER(team_name)) > 0
-                       OR INSTR(?, LOWER(team_short_name)) > 0
+                       OR (INSTR(?, LOWER(team_name)) > 0 AND LENGTH(team_name) >= 6)
+                       OR (INSTR(?, LOWER(team_short_name)) > 0 AND LENGTH(team_short_name) >= 6)
                 """, (f"%{variant}%", variant, f"%{variant}%", f"%{variant}%", variant, variant))
                 for row in cursor.fetchall():
                     team2_leagues.add(row[0])

@@ -648,13 +648,12 @@ class MultiSportMatcher:
             detected_league, team_result, detected_api_path_override, found_result = leagues_with_final_games[0]
             found_event = found_result
             detection_tier = '3c'
-        # If no game found in any league, fall back to first match
-        # BUT do NOT set detection_tier - no event was found, so no tier success
-        elif not detected_league and matched_candidates:
-            detected_league, team_result, api_override = matched_candidates[0]
-            detected_api_path_override = api_override
-            # detection_tier stays None - no event was found
-            # The caller must still try to find an event or fail
+        # IMPORTANT: If no game found in ANY candidate league, do NOT set detected_league.
+        # Setting a league without an event violates the principle that we only return
+        # authoritative league/sport from matched events. Let downstream code (Tier 4,
+        # schedule searches) continue trying other detection methods.
+        # DO NOT fall back to first candidate - that would pick an arbitrary league
+        # (e.g., soccer over volleyball) without evidence of a game.
 
         # For soccer leagues detected via cache, check if we need api_path_override
         if detected_league and not detected_api_path_override:

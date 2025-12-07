@@ -761,9 +761,11 @@ class LeagueDetector:
 
                 # Tier 3: Strip numbers from both search term and DB values
                 # Handles "SV Elversberg" matching "SV 07 Elversberg"
+                # IMPORTANT: Always run DB-side stripping even if search has no numbers,
+                # because the DB value might have numbers (e.g., "SV 07 Elversberg")
                 stripped = normalize_team_name(team_name, strip_articles=False)
 
-                if stripped and stripped != team_name:
+                if stripped:
                     cursor.execute(f"""
                         SELECT DISTINCT league_slug FROM soccer_team_leagues
                         WHERE {SQL_STRIP_NUMBERS} LIKE ?
@@ -911,7 +913,9 @@ class LeagueDetector:
                         return row
 
                 # Tier 3: Number-stripped match
-                if team_stripped != team_lower:
+                # IMPORTANT: Always run DB-side stripping even if search has no numbers,
+                # because the DB value might have numbers (e.g., "SV 07 Elversberg")
+                if team_stripped:
                     cursor.execute(f"""
                         SELECT espn_team_id, team_name FROM soccer_team_leagues
                         WHERE league_slug = ? AND (
@@ -928,7 +932,7 @@ class LeagueDetector:
                         return row
 
                 # Tier 4: Article-stripped match (de, del, da, do, di, du)
-                if team_normalized != team_stripped:
+                if team_normalized and team_normalized != team_stripped:
                     # Search with both accent and article stripping
                     cursor.execute("""
                         SELECT espn_team_id, team_name FROM soccer_team_leagues
@@ -1134,7 +1138,7 @@ class LeagueDetector:
             common_leagues = list(set(team1_leagues) & set(team2_leagues))
 
             # Determine reason and detail
-            from utils.filter_reasons import is_beach_soccer, is_boxing_mma
+            from utils.filter_reasons import is_beach_soccer, is_boxing_mma, is_futsal
 
             if not team1_found and not team2_found:
                 # Neither team found - check if it's an unsupported sport as FINAL fallback
@@ -1147,6 +1151,10 @@ class LeagueDetector:
                     reason = FilterReason.UNSUPPORTED_BEACH_SOCCER
                     detail = "Beach soccer not supported by ESPN API"
                     logger.debug(f"Beach soccer detected: '{team1}' vs '{team2}'")
+                elif is_futsal(team1, team2):
+                    reason = FilterReason.UNSUPPORTED_FUTSAL
+                    detail = "Futsal not supported by ESPN API"
+                    logger.debug(f"Futsal detected: '{team1}' vs '{team2}'")
                 else:
                     reason = FilterReason.TEAMS_NOT_IN_ESPN
                     detail = f"Neither '{team1}' nor '{team2}' found in ESPN database"
@@ -1155,6 +1163,9 @@ class LeagueDetector:
                 if is_beach_soccer(team1, None):
                     reason = FilterReason.UNSUPPORTED_BEACH_SOCCER
                     detail = "Beach soccer not supported by ESPN API"
+                elif is_futsal(team1, None):
+                    reason = FilterReason.UNSUPPORTED_FUTSAL
+                    detail = "Futsal not supported by ESPN API"
                 else:
                     reason = FilterReason.TEAMS_NOT_IN_ESPN
                     detail = f"'{team1}' not found in ESPN database"
@@ -1163,6 +1174,9 @@ class LeagueDetector:
                 if is_beach_soccer(None, team2):
                     reason = FilterReason.UNSUPPORTED_BEACH_SOCCER
                     detail = "Beach soccer not supported by ESPN API"
+                elif is_futsal(None, team2):
+                    reason = FilterReason.UNSUPPORTED_FUTSAL
+                    detail = "Futsal not supported by ESPN API"
                 else:
                     reason = FilterReason.TEAMS_NOT_IN_ESPN
                     detail = f"'{team2}' not found in ESPN database"
@@ -1732,12 +1746,14 @@ class LeagueDetector:
         for team_name, entries_list in [(team1, team1_entries), (team2, team2_entries)]:
             variants = get_abbreviation_variants(team_name)
             for variant in variants:
-                # Check US sports cache
+                # Check US sports cache - search team_name, team_abbrev, and team_short_name
                 cursor.execute("""
                     SELECT espn_team_id, league_code, team_name
                     FROM team_league_cache
                     WHERE LOWER(team_name) LIKE ?
-                """, (f'%{variant}%',))
+                       OR LOWER(team_abbrev) LIKE ?
+                       OR LOWER(team_short_name) LIKE ?
+                """, (f'%{variant}%', f'%{variant}%', f'%{variant}%'))
                 for row in cursor.fetchall():
                     entry = (row[0], row[1], row[2], 'us_sports')
                     if entry not in entries_list:
@@ -2187,22 +2203,32 @@ class LeagueDetector:
                     continue
 
                 # Collect events from both schedule AND scoreboard
-                # Schedule API has future games, scoreboard has today's games
+                # Schedule API has future games, but some events (NCAA tournaments)
+                # only appear on scoreboard. Fetch scoreboard for multiple days.
                 all_events = []
+                existing_ids = set()
 
-                # 1. Check scoreboard first (today's games)
-                scoreboard = self.espn.get_scoreboard(sport, api_league)
-                if scoreboard and 'events' in scoreboard:
-                    all_events.extend(scoreboard.get('events', []))
+                # 1. Check scoreboard for lookahead window (NCAA tournaments may only be here)
+                # Start from -1 (yesterday) to handle timezone edge cases
+                for day_offset in range(-1, min(self.lookahead_days, 7)):
+                    check_date = now + timedelta(days=day_offset)
+                    date_str = check_date.strftime('%Y%m%d')
+                    scoreboard = self.espn.get_scoreboard(sport, api_league, date_str)
+                    if scoreboard and 'events' in scoreboard:
+                        for event in scoreboard.get('events', []):
+                            event_id = event.get('id')
+                            if event_id and event_id not in existing_ids:
+                                all_events.append(event)
+                                existing_ids.add(event_id)
 
-                # 2. Also check team schedule (future games)
+                # 2. Also check team schedule (may have additional future games)
                 schedule = self.espn.get_team_schedule(sport, api_league, team1_id)
                 if schedule and 'events' in schedule:
-                    # Avoid duplicates by event ID
-                    existing_ids = {e.get('id') for e in all_events}
                     for event in schedule.get('events', []):
-                        if event.get('id') not in existing_ids:
+                        event_id = event.get('id')
+                        if event_id and event_id not in existing_ids:
                             all_events.append(event)
+                            existing_ids.add(event_id)
 
                 if not all_events:
                     continue

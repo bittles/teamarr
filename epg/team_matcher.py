@@ -24,6 +24,66 @@ from utils.regex_helper import REGEX_MODULE
 logger = get_logger(__name__)
 
 
+def fix_mojibake(text: str) -> str:
+    """
+    Fix UTF-8 mojibake (double-encoding) in stream names.
+
+    This happens when UTF-8 bytes are incorrectly decoded as Latin-1/Windows-1252,
+    resulting in garbled characters like:
+    - Ã© instead of é
+    - Ã¼ instead of ü
+    - Ã± instead of ñ
+    - Ã¶ instead of ö
+
+    Args:
+        text: Potentially mojibake'd text
+
+    Returns:
+        Fixed text with proper Unicode characters
+    """
+    if not text:
+        return text
+
+    # Common mojibake patterns (Latin-1 interpretation of UTF-8 bytes)
+    # Only fix if we see these specific patterns to avoid breaking valid text
+    mojibake_patterns = [
+        ('Ã©', 'é'),  # e-acute
+        ('Ã¨', 'è'),  # e-grave
+        ('Ã±', 'ñ'),  # n-tilde
+        ('Ã¼', 'ü'),  # u-umlaut
+        ('Ã¶', 'ö'),  # o-umlaut
+        ('Ã¤', 'ä'),  # a-umlaut
+        ('Ã³', 'ó'),  # o-acute
+        ('Ã¡', 'á'),  # a-acute
+        ('Ã­', 'í'),  # i-acute
+        ('Ãº', 'ú'),  # u-acute
+        ('Ã§', 'ç'),  # c-cedilla
+        ('Ã£', 'ã'),  # a-tilde
+        ('Ãµ', 'õ'),  # o-tilde
+        ('Ã', 'Á'),   # A-acute (uppercase) - must come after others
+    ]
+
+    result = text
+    for wrong, right in mojibake_patterns:
+        result = result.replace(wrong, right)
+
+    return result
+
+
+# Common name variants for European teams
+# Maps stream name variants to ESPN canonical names
+CITY_NAME_VARIANTS = {
+    # German cities
+    'münchen': 'munich',
+    'munchen': 'munich',
+    'köln': 'cologne',
+    'koln': 'cologne',
+    'nürnberg': 'nuremberg',
+    'nurnberg': 'nuremberg',
+    # Note: ESPN uses English names (Munich, Cologne) not German (München, Köln)
+}
+
+
 # Module-level shared cache for team data across all TeamMatcher instances
 # This prevents redundant ESPN API calls when processing streams in parallel
 _shared_team_cache: Dict[str, Dict] = {}
@@ -665,10 +725,12 @@ class TeamMatcher:
         that's common in IPTV stream names.
 
         Architecture (mask-then-strip):
+        0. Fix mojibake (UTF-8 double-encoding)
         1. Apply simple prefix removals that don't affect colon positions
         2. Mask times (so colons in times don't confuse prefix detection)
         3. Strip prefix at colon (now simple - any remaining colon is metadata)
         4. Apply standard normalization
+        5. Apply city name variants (München→Munich, Köln→Cologne)
 
         Args:
             stream_name: Raw stream/channel name
@@ -676,7 +738,8 @@ class TeamMatcher:
         Returns:
             Cleaned string with just team matchup info
         """
-        text = stream_name
+        # Step 0: Fix mojibake first (e.g., "Ã©" → "é")
+        text = fix_mojibake(stream_name)
 
         # Remove country/region prefixes like "(UK)", "(US)", "CA"
         text = re.sub(r'^\(?\s*(uk|us|usa|ca|au)\s*\)?[\s|:]*', '', text, flags=re.I)
@@ -704,8 +767,16 @@ class TeamMatcher:
         # Remove parenthesized language codes like "(ESP)", "(SPA)", "(FRA)", "(GER)", "(POR)", "(ITA)", "(ARA)"
         text = re.sub(r'^\((?:ESP|SPA|FRA|GER|POR|ITA|ARA)\)\s*[-:]?\s*', '', text, flags=re.I)
 
-        # Now apply standard normalization
-        return self._normalize_text(text)
+        # Apply standard normalization first
+        text = self._normalize_text(text)
+
+        # Apply city name variants (ESPN uses English names)
+        # München→Munich, Köln→Cologne, etc.
+        for variant, canonical in CITY_NAME_VARIANTS.items():
+            # Use word boundary matching to avoid partial replacements
+            text = re.sub(r'\b' + re.escape(variant) + r'\b', canonical, text, flags=re.I)
+
+        return text
 
     def _find_separator(self, text: str) -> Tuple[Optional[str], int]:
         """

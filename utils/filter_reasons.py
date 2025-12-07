@@ -80,6 +80,9 @@ class FilterReason:
     # Boxing/MMA detected (main card, undercard, prelims) - not supported
     UNSUPPORTED_BOXING_MMA = 'unsupported_boxing_mma'
 
+    # Futsal detected (FP suffix = Futbol Playa/Futsal Playa) - not supported
+    UNSUPPORTED_FUTSAL = 'unsupported_futsal'
+
     # =========================================================================
     # Configuration Mismatch Reasons
     # =========================================================================
@@ -102,6 +105,7 @@ DISPLAY_TEXT = {
     FilterReason.NO_COMMON_LEAGUE: 'No common league for teams',
     FilterReason.UNSUPPORTED_BEACH_SOCCER: 'Unsupported (Beach Soccer)',
     FilterReason.UNSUPPORTED_BOXING_MMA: 'Unsupported (Boxing/MMA)',
+    FilterReason.UNSUPPORTED_FUTSAL: 'Unsupported (Futsal)',
     FilterReason.LEAGUE_NOT_ENABLED: 'League not enabled',
 }
 
@@ -253,6 +257,36 @@ def is_beach_soccer(team1: str, team2: str) -> bool:
 
     for team in [team1, team2]:
         if team and beach_pattern.search(team.strip()):
+            return True
+
+    return False
+
+
+def is_futsal(team1: str, team2: str) -> bool:
+    """
+    Detect if teams are likely futsal based on FP suffix.
+
+    Futsal teams commonly use:
+    - FP = Futbol Playa / Futsal Playa (e.g., "USAC FP", "FP Riviera Maya")
+
+    Args:
+        team1: First team name
+        team2: Second team name
+
+    Returns:
+        True if either team appears to be a futsal team
+    """
+    import re
+
+    if not team1 and not team2:
+        return False
+
+    # Pattern: team name ending with FP or starting with FP
+    # e.g., "USAC FP", "FP Riviera Maya", "Dimas Escazú FP"
+    futsal_pattern = re.compile(r'(\bFP\s*$|^FP\s+)', re.IGNORECASE)
+
+    for team in [team1, team2]:
+        if team and futsal_pattern.search(team.strip()):
             return True
 
     return False

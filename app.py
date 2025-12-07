@@ -556,6 +556,7 @@ def refresh_event_group_core(group, m3u_manager, skip_m3u_refresh=False, epg_sta
         filtered_outside_lookahead = 0
         filtered_final = 0
         filtered_league_not_enabled = 0
+        filtered_unsupported_sport = 0
         results = []
 
         if streams:  # Only use ThreadPoolExecutor if there are streams to process
@@ -578,6 +579,8 @@ def refresh_event_group_core(group, m3u_manager, skip_m3u_refresh=False, epg_sta
                     filtered_outside_lookahead += 1
                 elif reason == FilterReason.LEAGUE_NOT_ENABLED:
                     filtered_league_not_enabled += 1
+                elif reason in (FilterReason.UNSUPPORTED_BEACH_SOCCER, FilterReason.UNSUPPORTED_BOXING_MMA, FilterReason.UNSUPPORTED_FUTSAL):
+                    filtered_unsupported_sport += 1
 
         matched_count = len(matched_streams)
 
@@ -628,7 +631,7 @@ def refresh_event_group_core(group, m3u_manager, skip_m3u_refresh=False, epg_sta
 
         # Calculate totals for stats
         game_stream_count = len(streams)
-        total_event_excluded = filtered_outside_lookahead + filtered_final + filtered_league_not_enabled
+        total_event_excluded = filtered_outside_lookahead + filtered_final + filtered_league_not_enabled + filtered_unsupported_sport
         effective_stream_count = game_stream_count - total_event_excluded
 
         # Update stats with granular filtering breakdown
@@ -641,7 +644,9 @@ def refresh_event_group_core(group, m3u_manager, skip_m3u_refresh=False, epg_sta
             filtered_include_regex=filtered_include_regex,
             filtered_exclude_regex=filtered_exclude_regex,
             filtered_outside_lookahead=filtered_outside_lookahead,
-            filtered_final=filtered_final
+            filtered_final=filtered_final,
+            filtered_league_not_enabled=filtered_league_not_enabled,
+            filtered_unsupported_sport=filtered_unsupported_sport
         )
 
         # Log with filtering info
@@ -657,6 +662,8 @@ def refresh_event_group_core(group, m3u_manager, skip_m3u_refresh=False, epg_sta
                 exclude_parts.append(f"{filtered_final} final")
             if filtered_league_not_enabled > 0:
                 exclude_parts.append(f"{filtered_league_not_enabled} league disabled")
+            if filtered_unsupported_sport > 0:
+                exclude_parts.append(f"{filtered_unsupported_sport} unsupported sport")
             log_parts.append(f"{total_event_excluded} event excluded ({', '.join(exclude_parts)})")
         app.logger.debug(" | ".join(log_parts))
 
@@ -673,6 +680,8 @@ def refresh_event_group_core(group, m3u_manager, skip_m3u_refresh=False, epg_sta
                 'filtered_exclude_regex': filtered_exclude_regex,
                 'filtered_outside_lookahead': filtered_outside_lookahead,
                 'filtered_final': filtered_final,
+                'filtered_league_not_enabled': filtered_league_not_enabled,
+                'filtered_unsupported_sport': filtered_unsupported_sport,
                 'matched_count': matched_count,
                 'matched_streams': [],
                 'error': 'No event template assigned to this group'
@@ -715,7 +724,15 @@ def refresh_event_group_core(group, m3u_manager, skip_m3u_refresh=False, epg_sta
                 if not epg_result.get('success'):
                     return {
                         'success': False,
-                        'stream_count': len(streams),
+                        'total_stream_count': total_stream_count,
+                        'stream_count': game_stream_count,
+                        'filtered_no_indicator': filtered_no_indicator,
+                        'filtered_include_regex': filtered_include_regex,
+                        'filtered_exclude_regex': filtered_exclude_regex,
+                        'filtered_outside_lookahead': filtered_outside_lookahead,
+                        'filtered_final': filtered_final,
+                        'filtered_league_not_enabled': filtered_league_not_enabled,
+                        'filtered_unsupported_sport': filtered_unsupported_sport,
                         'matched_count': matched_count,
                         'matched_streams': matched_streams,
                         'error': f"EPG generation failed: {epg_result.get('error')}",
@@ -826,6 +843,8 @@ def refresh_event_group_core(group, m3u_manager, skip_m3u_refresh=False, epg_sta
             'filtered_exclude_regex': filtered_exclude_regex,
             'filtered_outside_lookahead': filtered_outside_lookahead,
             'filtered_final': filtered_final,
+            'filtered_league_not_enabled': filtered_league_not_enabled,
+            'filtered_unsupported_sport': filtered_unsupported_sport,
             'matched_count': matched_count,
             'matched_streams': matched_streams,
             'epg_result': epg_result,
@@ -905,6 +924,8 @@ def generate_all_epg(progress_callback=None, settings=None, save_history=True, t
         'filtered_exclude_regex': 0,
         'filtered_outside_lookahead': 0,
         'filtered_final': 0,
+        'filtered_league_not_enabled': 0,
+        'filtered_unsupported_sport': 0,
         'eligible_streams': 0
     }
     lifecycle_stats = {
@@ -1108,6 +1129,8 @@ def generate_all_epg(progress_callback=None, settings=None, save_history=True, t
                                 event_stats['filtered_exclude_regex'] += refresh_result.get('filtered_exclude_regex', 0)
                                 event_stats['filtered_outside_lookahead'] += refresh_result.get('filtered_outside_lookahead', 0)
                                 event_stats['filtered_final'] += refresh_result.get('filtered_final', 0)
+                                event_stats['filtered_league_not_enabled'] += refresh_result.get('filtered_league_not_enabled', 0)
+                                event_stats['filtered_unsupported_sport'] += refresh_result.get('filtered_unsupported_sport', 0)
 
                             progress_percent = 55 + int(30 * completed_count / total_groups)
                             report_progress(
@@ -1143,6 +1166,8 @@ def generate_all_epg(progress_callback=None, settings=None, save_history=True, t
                                 event_stats['filtered_exclude_regex'] += refresh_result.get('filtered_exclude_regex', 0)
                                 event_stats['filtered_outside_lookahead'] += refresh_result.get('filtered_outside_lookahead', 0)
                                 event_stats['filtered_final'] += refresh_result.get('filtered_final', 0)
+                                event_stats['filtered_league_not_enabled'] += refresh_result.get('filtered_league_not_enabled', 0)
+                                event_stats['filtered_unsupported_sport'] += refresh_result.get('filtered_unsupported_sport', 0)
                                 event_stats['eligible_streams'] += refresh_result.get('stream_count', 0)
                                 update_event_epg_group_last_refresh(group['id'])
 
@@ -1292,6 +1317,8 @@ def generate_all_epg(progress_callback=None, settings=None, save_history=True, t
                 'event_filtered_exclude_regex': event_stats['filtered_exclude_regex'],
                 'event_filtered_outside_lookahead': event_stats['filtered_outside_lookahead'],
                 'event_filtered_final': event_stats['filtered_final'],
+                'event_filtered_league_not_enabled': event_stats['filtered_league_not_enabled'],
+                'event_filtered_unsupported_sport': event_stats['filtered_unsupported_sport'],
                 'event_eligible_streams': event_stats['eligible_streams'],
                 'event_matched_streams': event_stats['streams_matched'],
                 # Quality stats (not tracked here, defaults to 0)

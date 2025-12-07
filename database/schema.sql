@@ -263,7 +263,7 @@ CREATE TABLE IF NOT EXISTS settings (
     team_cache_refresh_frequency TEXT DEFAULT 'weekly',    -- daily, every_3_days, weekly, manual
 
     -- Schema versioning for migrations
-    schema_version INTEGER DEFAULT 19,  -- Current schema version (increment with each migration)
+    schema_version INTEGER DEFAULT 21,  -- Current schema version (increment with each migration)
 
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -397,6 +397,15 @@ CREATE TABLE IF NOT EXISTS epg_history (
     event_based_events INTEGER DEFAULT 0,
     event_based_pregame INTEGER DEFAULT 0,
     event_based_postgame INTEGER DEFAULT 0,
+
+    -- Event Filtering Stats (aggregated from all groups)
+    event_filtered_no_indicator INTEGER DEFAULT 0,       -- No vs/@/at
+    event_filtered_include_regex INTEGER DEFAULT 0,      -- Didn't match inclusion regex
+    event_filtered_exclude_regex INTEGER DEFAULT 0,      -- Matched exclusion regex
+    event_filtered_outside_lookahead INTEGER DEFAULT 0,  -- Past events
+    event_filtered_final INTEGER DEFAULT 0,              -- Final events excluded
+    event_filtered_league_not_enabled INTEGER DEFAULT 0, -- League not enabled
+    event_filtered_unsupported_sport INTEGER DEFAULT 0,  -- Unsupported sports
 
     -- Quality/Error Stats
     unresolved_vars_count INTEGER DEFAULT 0,
@@ -720,8 +729,18 @@ CREATE TABLE IF NOT EXISTS event_epg_groups (
 
     -- Stats (updated after each generation)
     last_refresh TIMESTAMP,                        -- Last time EPG was generated
-    stream_count INTEGER DEFAULT 0,                -- Number of streams in group
-    matched_count INTEGER DEFAULT 0                -- Number of streams matched to ESPN events
+    total_stream_count INTEGER DEFAULT 0,          -- Raw stream count from provider
+    stream_count INTEGER DEFAULT 0,                -- Eligible streams (after filtering/exclusions)
+    matched_count INTEGER DEFAULT 0,               -- Number of streams matched to ESPN events
+
+    -- Filtering Stats (for match rate calculation and UI display)
+    filtered_no_indicator INTEGER DEFAULT 0,       -- No vs/@/at (built-in filter)
+    filtered_include_regex INTEGER DEFAULT 0,      -- Didn't match user's inclusion regex
+    filtered_exclude_regex INTEGER DEFAULT 0,      -- Matched user's exclusion regex
+    filtered_outside_lookahead INTEGER DEFAULT 0,  -- Date outside lookahead window (past events)
+    filtered_final INTEGER DEFAULT 0,              -- Final events (when exclude setting on)
+    filtered_league_not_enabled INTEGER DEFAULT 0, -- Event in league not enabled for this group
+    filtered_unsupported_sport INTEGER DEFAULT 0   -- Beach soccer, boxing/MMA, futsal
 );
 
 CREATE INDEX IF NOT EXISTS idx_event_epg_groups_league ON event_epg_groups(assigned_league);

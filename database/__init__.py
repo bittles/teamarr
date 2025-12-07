@@ -335,7 +335,7 @@ def get_league_alias(slug: str) -> str:
 #   16: Multi-sport event groups (is_multi_sport, enabled_leagues, etc.)
 # =============================================================================
 
-CURRENT_SCHEMA_VERSION = 19
+CURRENT_SCHEMA_VERSION = 21
 
 
 def get_schema_version(conn) -> int:
@@ -1453,6 +1453,46 @@ def run_migrations(conn):
         print("    ✅ Migration 19 complete: Added womens-college-hockey league")
 
     # =========================================================================
+    # 20. ADD FILTERED_LEAGUE_NOT_ENABLED COLUMN
+    # =========================================================================
+    if current_version < 20:
+        print("  🔄 Running migration 20: Add filtered_league_not_enabled column...")
+
+        # Add column to event_epg_groups for per-group stats
+        add_columns_if_missing('event_epg_groups', [
+            ('filtered_league_not_enabled', 'INTEGER DEFAULT 0'),
+        ])
+
+        # Add column to epg_history for aggregate stats
+        add_columns_if_missing('epg_history', [
+            ('event_filtered_league_not_enabled', 'INTEGER DEFAULT 0'),
+        ])
+
+        conn.commit()
+        migrations_run += 1
+        print("    ✅ Migration 20 complete: Added filtered_league_not_enabled tracking")
+
+    # =========================================================================
+    # 21. ADD FILTERED_UNSUPPORTED_SPORT COLUMN
+    # =========================================================================
+    if current_version < 21:
+        print("  🔄 Running migration 21: Add filtered_unsupported_sport tracking")
+
+        # Add column to event_epg_groups for per-group stats
+        add_columns_if_missing("event_epg_groups", [
+            ("filtered_unsupported_sport", "INTEGER DEFAULT 0"),
+        ])
+
+        # Add column to epg_history for aggregate stats
+        add_columns_if_missing("epg_history", [
+            ("event_filtered_unsupported_sport", "INTEGER DEFAULT 0"),
+        ])
+
+        conn.commit()
+        migrations_run += 1
+        print("    ✅ Migration 21 complete: Added filtered_unsupported_sport tracking")
+
+    # =========================================================================
     # UPDATE SCHEMA VERSION
     # =========================================================================
     # All migrations complete - update version to current
@@ -2362,7 +2402,9 @@ def update_event_epg_group_stats(
     filtered_include_regex: int = None,
     filtered_exclude_regex: int = None,
     filtered_outside_lookahead: int = None,
-    filtered_final: int = None
+    filtered_final: int = None,
+    filtered_league_not_enabled: int = None,
+    filtered_unsupported_sport: int = None
 ) -> bool:
     """
     Update stats after EPG generation.
@@ -2377,6 +2419,8 @@ def update_event_epg_group_stats(
         filtered_exclude_regex: Streams matching exclusion regex (optional)
         filtered_outside_lookahead: Streams outside date range (optional)
         filtered_final: Final events excluded by setting (optional)
+        filtered_league_not_enabled: Streams in non-enabled leagues (optional)
+        filtered_unsupported_sport: Streams for unsupported sports (beach soccer, boxing/MMA, futsal)
 
     Returns:
         True if update succeeded
@@ -2403,6 +2447,12 @@ def update_event_epg_group_stats(
     if filtered_final is not None:
         fields.append("filtered_final = ?")
         values.append(filtered_final)
+    if filtered_league_not_enabled is not None:
+        fields.append("filtered_league_not_enabled = ?")
+        values.append(filtered_league_not_enabled)
+    if filtered_unsupported_sport is not None:
+        fields.append("filtered_unsupported_sport = ?")
+        values.append(filtered_unsupported_sport)
 
     values.append(group_id)
 
@@ -2986,9 +3036,11 @@ def save_epg_generation_stats(stats: Dict[str, Any]) -> int:
                 event_total_streams, event_filtered_no_indicator,
                 event_filtered_include_regex, event_filtered_exclude_regex,
                 event_filtered_outside_lookahead,
-                event_filtered_final, event_eligible_streams, event_matched_streams,
+                event_filtered_final, event_filtered_league_not_enabled,
+                event_filtered_unsupported_sport,
+                event_eligible_streams, event_matched_streams,
                 unresolved_vars_count, coverage_gaps_count, warnings_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             stats.get('file_path', ''),
             stats.get('file_size', 0),
@@ -3022,6 +3074,8 @@ def save_epg_generation_stats(stats: Dict[str, Any]) -> int:
             stats.get('event_filtered_exclude_regex', 0),
             stats.get('event_filtered_outside_lookahead', 0),
             stats.get('event_filtered_final', 0),
+            stats.get('event_filtered_league_not_enabled', 0),
+            stats.get('event_filtered_unsupported_sport', 0),
             stats.get('event_eligible_streams', 0),
             stats.get('event_matched_streams', 0),
             # Quality stats

@@ -24,6 +24,8 @@
             filtered_exclude_regex=0,
             filtered_outside_lookahead=0,
             filtered_final=0,
+            filtered_league_not_enabled=0,
+            filtered_unsupported_sport=0,
             eligible_streams=0,
             matched_streams=0
         ) %}
@@ -33,10 +35,12 @@
             {% set stats.filtered_exclude_regex = stats.filtered_exclude_regex + (group.filtered_exclude_regex or 0) %}
             {% set stats.filtered_outside_lookahead = stats.filtered_outside_lookahead + (group.filtered_outside_lookahead or 0) %}
             {% set stats.filtered_final = stats.filtered_final + (group.filtered_final or 0) %}
+            {% set stats.filtered_league_not_enabled = stats.filtered_league_not_enabled + (group.filtered_league_not_enabled or 0) %}
+            {% set stats.filtered_unsupported_sport = stats.filtered_unsupported_sport + (group.filtered_unsupported_sport or 0) %}
             {% set stats.eligible_streams = stats.eligible_streams + (group.stream_count or 0) %}
             {% set stats.matched_streams = stats.matched_streams + (group.matched_count or 0) %}
         {% endfor %}
-        {% set stats.total_filtered = stats.filtered_no_indicator + stats.filtered_exclude_regex + stats.filtered_outside_lookahead + stats.filtered_final %}
+        {% set stats.total_filtered = stats.filtered_no_indicator + stats.filtered_exclude_regex + stats.filtered_outside_lookahead + stats.filtered_final + stats.filtered_league_not_enabled + stats.filtered_unsupported_sport %}
         {% set stats.match_rate = ((stats.matched_streams / stats.eligible_streams * 100) | round | int) if stats.eligible_streams > 0 else 0 %}
 
         <h2 class="stats-section-title">📊 Event Groups Analysis</h2>
@@ -82,6 +86,18 @@
                     <div class="tooltip-row">
                         <span class="tooltip-name">Final (excluded)</span>
                         <span class="tooltip-value">{{ stats.filtered_final }}</span>
+                    </div>
+                    {% endif %}
+                    {% if stats.filtered_league_not_enabled > 0 %}
+                    <div class="tooltip-row">
+                        <span class="tooltip-name">League not enabled</span>
+                        <span class="tooltip-value">{{ stats.filtered_league_not_enabled }}</span>
+                    </div>
+                    {% endif %}
+                    {% if stats.filtered_unsupported_sport > 0 %}
+                    <div class="tooltip-row">
+                        <span class="tooltip-name">Unsupported sport</span>
+                        <span class="tooltip-value">{{ stats.filtered_unsupported_sport }}</span>
                     </div>
                     {% endif %}
                     <div class="tooltip-row tooltip-total">
@@ -278,12 +294,21 @@
                             <td class="text-center">{{ group.stream_count or 0 }}</td>
                             <td>
                                 {% if group.stream_count and group.stream_count > 0 %}
-                                <div class="match-rate-container">
+                                {% set league_disabled = group.filtered_league_not_enabled or 0 %}
+                                {% set unsupported_sport = group.filtered_unsupported_sport or 0 %}
+                                {% set total_excluded = league_disabled + unsupported_sport %}
+                                {% set exclusion_parts = [] %}
+                                {% if league_disabled > 0 %}{% set _ = exclusion_parts.append(league_disabled ~ ' league disabled') %}{% endif %}
+                                {% if unsupported_sport > 0 %}{% set _ = exclusion_parts.append(unsupported_sport ~ ' unsupported sport') %}{% endif %}
+                                <div class="match-rate-container" {% if total_excluded > 0 %}title="{{ total_excluded }} stream(s) excluded: {{ exclusion_parts | join(', ') }}"{% endif %}>
                                     <div class="match-rate-bar">
                                         <div class="match-rate-fill {% if match_rate >= 80 %}rate-good{% elif match_rate >= 50 %}rate-warn{% else %}rate-bad{% endif %}"
                                              style="width: {{ match_rate }}%;"></div>
                                     </div>
-                                    <span class="match-rate-text">{{ group.matched_count or 0 }}/{{ group.stream_count }} ({{ match_rate }}%)</span>
+                                    <span class="match-rate-text">
+                                        {{ group.matched_count or 0 }}/{{ group.stream_count }} ({{ match_rate }}%)
+                                        {%- if total_excluded > 0 %} <span class="badge badge-league-disabled" title="{{ exclusion_parts | join(', ') }}">+{{ total_excluded }}</span>{% endif %}
+                                    </span>
                                 </div>
                                 {% else %}
                                 <span class="text-muted" style="font-style: italic; font-size: 0.75rem;">No active streams</span>
@@ -372,12 +397,21 @@
                                 <td class="text-center">{{ child.stream_count or 0 }}</td>
                                 <td>
                                     {% if child.stream_count and child.stream_count > 0 %}
-                                    <div class="match-rate-container">
+                                    {% set child_league_disabled = child.filtered_league_not_enabled or 0 %}
+                                    {% set child_unsupported_sport = child.filtered_unsupported_sport or 0 %}
+                                    {% set child_total_excluded = child_league_disabled + child_unsupported_sport %}
+                                    {% set child_exclusion_parts = [] %}
+                                    {% if child_league_disabled > 0 %}{% set _ = child_exclusion_parts.append(child_league_disabled ~ ' league disabled') %}{% endif %}
+                                    {% if child_unsupported_sport > 0 %}{% set _ = child_exclusion_parts.append(child_unsupported_sport ~ ' unsupported sport') %}{% endif %}
+                                    <div class="match-rate-container" {% if child_total_excluded > 0 %}title="{{ child_total_excluded }} stream(s) excluded: {{ child_exclusion_parts | join(', ') }}"{% endif %}>
                                         <div class="match-rate-bar">
                                             <div class="match-rate-fill {% if child_match_rate >= 80 %}rate-good{% elif child_match_rate >= 50 %}rate-warn{% else %}rate-bad{% endif %}"
                                                  style="width: {{ child_match_rate }}%;"></div>
                                         </div>
-                                        <span class="match-rate-text">{{ child.matched_count or 0 }}/{{ child.stream_count }} ({{ child_match_rate }}%)</span>
+                                        <span class="match-rate-text">
+                                            {{ child.matched_count or 0 }}/{{ child.stream_count }} ({{ child_match_rate }}%)
+                                            {%- if child_total_excluded > 0 %} <span class="badge badge-league-disabled" title="{{ child_exclusion_parts | join(', ') }}">+{{ child_total_excluded }}</span>{% endif %}
+                                        </span>
                                     </div>
                                     {% else %}
                                     <span class="text-muted" style="font-style: italic; font-size: 0.75rem;">No active streams</span>
@@ -1683,6 +1717,21 @@ code {
 .light-theme .badge-inherited {
     background: rgba(168, 85, 247, 0.1);
     color: #7c3aed;
+}
+
+.badge-league-disabled {
+    background: rgba(251, 146, 60, 0.2);
+    color: #fb923c;
+    font-size: 0.65rem;
+    padding: 0.1rem 0.3rem;
+    border-radius: 3px;
+    margin-left: 0.25rem;
+    cursor: help;
+}
+
+.light-theme .badge-league-disabled {
+    background: rgba(251, 146, 60, 0.15);
+    color: #ea580c;
 }
 
 /* Child group row styling */

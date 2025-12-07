@@ -505,8 +505,8 @@ class MultiSportMatcher:
                     'away_team_name': sc['team1_name'],
                     'home_team_id': sc['team2_id'],
                     'home_team_name': sc['team2_name'],
-                    'game_date': None,
-                    'game_time': None,
+                    'game_date': game_date,
+                    'game_time': game_time,
                     'league': sc['league_code'] or sc['league_slug']
                 }
                 league_key = sc['league_code'] or sc['league_slug']
@@ -560,16 +560,41 @@ class MultiSportMatcher:
                 time_diff = float('inf')
                 if candidate.get('game_time') and test_result.get('event_date'):
                     from datetime import datetime
+                    from zoneinfo import ZoneInfo
+                    from utils.time_format import get_user_timezone
+                    from database import get_connection
                     try:
+                        # Event time from ESPN is in UTC
                         event_dt = datetime.fromisoformat(
                             test_result['event_date'].replace('Z', '+00:00')
                         )
                         target_time = candidate['game_time']
-                        event_mins = event_dt.hour * 60 + event_dt.minute
-                        target_mins = target_time.hour * 60 + target_time.minute
-                        time_diff = abs(event_mins - target_mins)
-                    except Exception:
-                        pass
+
+                        # Get user's timezone from settings
+                        user_tz_str = get_user_timezone(get_connection)
+                        user_tz = ZoneInfo(user_tz_str)
+
+                        # target_time is a time object parsed from stream (assumed user's timezone)
+                        # Build a full datetime using game_date or today, with user's timezone
+                        target_date = candidate.get('game_date')
+                        if target_date is None:
+                            target_date = datetime.now(user_tz).date()
+                        elif hasattr(target_date, 'date'):
+                            target_date = target_date.date()
+
+                        # Create target datetime in user's timezone
+                        target_dt = datetime.combine(
+                            target_date, target_time, tzinfo=user_tz
+                        )
+
+                        # Convert both to UTC for comparison
+                        event_utc = event_dt.astimezone(ZoneInfo('UTC'))
+                        target_utc = target_dt.astimezone(ZoneInfo('UTC'))
+
+                        # Calculate difference in minutes
+                        time_diff = abs((event_utc - target_utc).total_seconds() / 60)
+                    except Exception as e:
+                        logger.debug(f"Time comparison failed: {e}")
                 # Store test_result (contains the event) along with other data
                 leagues_with_games.append((league, candidate, api_path_override, test_result, time_diff))
             else:

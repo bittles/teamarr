@@ -2055,6 +2055,7 @@ class LeagueDetector:
         results = []
 
         # Check scoreboard for multiple days (same logic as other scoreboard checks)
+        # Early exit once we find a match - most games are on today's scoreboard
         for day_offset in range(-1, min(self.lookahead_days, 7)):
             check_date = now + timedelta(days=day_offset)
             date_str = check_date.strftime('%Y%m%d')
@@ -2101,6 +2102,8 @@ class LeagueDetector:
 
                 event_id = event.get('id')
                 results.append((event_id, event_dt, event_name))
+                # Early exit - found our match
+                return results
 
         return results
 

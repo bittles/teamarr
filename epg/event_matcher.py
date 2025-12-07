@@ -426,6 +426,7 @@ class EventMatcher:
         # Start from -1 (yesterday) to handle timezone edge cases where games
         # listed for Dec 6 in user's local time are Dec 6 in ESPN scoreboard
         # but current UTC date is already Dec 7
+        found_match = False
         for day_offset in range(-1, self.lookahead_days):
             check_date = now_utc + timedelta(days=day_offset)
             date_str = check_date.strftime('%Y%m%d')
@@ -449,6 +450,11 @@ class EventMatcher:
                 if str(team1_id) in team_ids_in_event and str(team2_id) in team_ids_in_event:
                     candidate_events.append(sb_event)
                     logger.debug(f"[TRACE] _search_scoreboard | candidate: {sb_event.get('name')} on {sb_event.get('date')}")
+                    found_match = True
+                    break  # Found match on this day, no need to check more events
+
+            if found_match:
+                break  # Found match, no need to check more days
 
         if not candidate_events:
             logger.debug(f"[TRACE] _search_scoreboard | no candidates found for {team1_id} vs {team2_id}")

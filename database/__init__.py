@@ -336,7 +336,7 @@ def get_league_alias(slug: str) -> str:
 #   23: Stream fingerprint cache for EPG generation optimization
 # =============================================================================
 
-CURRENT_SCHEMA_VERSION = 23
+CURRENT_SCHEMA_VERSION = 24
 
 
 def get_schema_version(conn) -> int:
@@ -1582,6 +1582,86 @@ def run_migrations(conn):
             print("    ✅ Migration 23 complete: Stream fingerprint cache created")
         except Exception as e:
             print(f"    ⚠️ Migration 23 error: {e}")
+            conn.rollback()
+
+    # =========================================================================
+    # 24. EPG Failed Matches Table
+    # =========================================================================
+    # Stores failed stream matches from each EPG generation for debugging.
+    # Cleared at start of each generation, populated during processing.
+    if current_version < 24:
+        print("  🔄 Migration 24: Creating EPG match tracking tables...")
+        try:
+            # Failed matches table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS epg_failed_matches (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    generation_id INTEGER NOT NULL,
+                    group_id INTEGER NOT NULL,
+                    group_name TEXT NOT NULL,
+                    stream_id INTEGER,
+                    stream_name TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    parsed_team1 TEXT,
+                    parsed_team2 TEXT,
+                    detection_tier TEXT,
+                    leagues_checked TEXT,
+                    detail TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+            # Index for generation lookups
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_efm_generation
+                ON epg_failed_matches(generation_id)
+            """)
+
+            # Index for group-based queries
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_efm_group
+                ON epg_failed_matches(group_id)
+            """)
+
+            # Matched streams table (successful matches)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS epg_matched_streams (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    generation_id INTEGER NOT NULL,
+                    group_id INTEGER NOT NULL,
+                    group_name TEXT NOT NULL,
+                    stream_id INTEGER,
+                    stream_name TEXT NOT NULL,
+                    event_id TEXT NOT NULL,
+                    event_name TEXT,
+                    detected_league TEXT,
+                    detection_tier TEXT,
+                    parsed_team1 TEXT,
+                    parsed_team2 TEXT,
+                    home_team TEXT,
+                    away_team TEXT,
+                    event_date TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+            # Index for generation lookups
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_ems_generation
+                ON epg_matched_streams(generation_id)
+            """)
+
+            # Index for group-based queries
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_ems_group
+                ON epg_matched_streams(group_id)
+            """)
+
+            conn.commit()
+            migrations_run += 1
+            print("    ✅ Migration 24 complete: EPG match tracking tables created")
+        except Exception as e:
+            print(f"    ⚠️ Migration 24 error: {e}")
             conn.rollback()
 
     # =========================================================================
@@ -3992,3 +4072,360 @@ def delete_consolidation_exception_keyword(keyword_id: int) -> bool:
         )
         conn.commit()
         return cursor.rowcount > 0
+
+
+# =============================================================================
+# EPG Failed Matches Functions
+# =============================================================================
+
+def clear_failed_matches(generation_id: int = None):
+    """
+    Clear failed matches, optionally for a specific generation.
+
+    Args:
+        generation_id: If provided, only clear for that generation.
+                      If None, clear all failed matches.
+    """
+    with db_connection() as conn:
+        if generation_id is not None:
+            conn.execute(
+                "DELETE FROM epg_failed_matches WHERE generation_id = ?",
+                (generation_id,)
+            )
+        else:
+            conn.execute("DELETE FROM epg_failed_matches")
+        conn.commit()
+
+
+def save_failed_match(
+    generation_id: int,
+    group_id: int,
+    group_name: str,
+    stream_name: str,
+    reason: str,
+    stream_id: int = None,
+    parsed_team1: str = None,
+    parsed_team2: str = None,
+    detection_tier: str = None,
+    leagues_checked: str = None,
+    detail: str = None
+):
+    """
+    Save a failed stream match for debugging.
+
+    Args:
+        generation_id: EPG generation counter
+        group_id: Event group ID
+        group_name: Event group name (for display)
+        stream_name: Full stream name
+        reason: Failure reason code
+        stream_id: Dispatcharr stream ID (optional)
+        parsed_team1: First parsed team name (optional)
+        parsed_team2: Second parsed team name (optional)
+        detection_tier: Tier reached before failure (optional)
+        leagues_checked: Comma-separated leagues tried (optional)
+        detail: Additional context (optional)
+    """
+    with db_connection() as conn:
+        conn.execute("""
+            INSERT INTO epg_failed_matches (
+                generation_id, group_id, group_name, stream_id, stream_name,
+                reason, parsed_team1, parsed_team2, detection_tier,
+                leagues_checked, detail
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            generation_id, group_id, group_name, stream_id, stream_name,
+            reason, parsed_team1, parsed_team2, detection_tier,
+            leagues_checked, detail
+        ))
+        conn.commit()
+
+
+def save_failed_matches_batch(failures: list):
+    """
+    Save multiple failed matches in a single transaction.
+
+    Args:
+        failures: List of dicts with keys matching save_failed_match params
+    """
+    if not failures:
+        return
+
+    with db_connection() as conn:
+        conn.executemany("""
+            INSERT INTO epg_failed_matches (
+                generation_id, group_id, group_name, stream_id, stream_name,
+                reason, parsed_team1, parsed_team2, detection_tier,
+                leagues_checked, detail
+            ) VALUES (
+                :generation_id, :group_id, :group_name, :stream_id, :stream_name,
+                :reason, :parsed_team1, :parsed_team2, :detection_tier,
+                :leagues_checked, :detail
+            )
+        """, failures)
+        conn.commit()
+
+
+def get_failed_matches(generation_id: int = None) -> List[Dict]:
+    """
+    Get failed matches, optionally for a specific generation.
+
+    Args:
+        generation_id: If provided, get for that generation.
+                      If None, get for the most recent generation.
+
+    Returns:
+        List of failed match dicts
+    """
+    with db_connection() as conn:
+        if generation_id is None:
+            # Get most recent generation
+            row = conn.execute(
+                "SELECT MAX(generation_id) FROM epg_failed_matches"
+            ).fetchone()
+            if not row or row[0] is None:
+                return []
+            generation_id = row[0]
+
+        cursor = conn.execute("""
+            SELECT
+                id, generation_id, group_id, group_name, stream_id, stream_name,
+                reason, parsed_team1, parsed_team2, detection_tier,
+                leagues_checked, detail, created_at
+            FROM epg_failed_matches
+            WHERE generation_id = ?
+            ORDER BY group_name, stream_name
+        """, (generation_id,))
+
+        return [dict(row) for row in cursor.fetchall()]
+
+
+def get_failed_matches_summary() -> Dict:
+    """
+    Get a summary of failed matches from the most recent generation.
+
+    Returns:
+        Dict with:
+            - generation_id: int
+            - total_count: int
+            - by_group: Dict[group_name, count]
+            - by_reason: Dict[reason, count]
+            - timestamp: str (ISO format)
+    """
+    with db_connection() as conn:
+        # Get most recent generation
+        row = conn.execute(
+            "SELECT MAX(generation_id) FROM epg_failed_matches"
+        ).fetchone()
+        if not row or row[0] is None:
+            return {'generation_id': None, 'total_count': 0, 'by_group': {}, 'by_reason': {}}
+
+        generation_id = row[0]
+
+        # Get total count
+        total = conn.execute(
+            "SELECT COUNT(*) FROM epg_failed_matches WHERE generation_id = ?",
+            (generation_id,)
+        ).fetchone()[0]
+
+        # Get counts by group
+        by_group = {}
+        for row in conn.execute("""
+            SELECT group_name, COUNT(*) as cnt
+            FROM epg_failed_matches
+            WHERE generation_id = ?
+            GROUP BY group_name
+            ORDER BY cnt DESC
+        """, (generation_id,)):
+            by_group[row['group_name']] = row['cnt']
+
+        # Get counts by reason
+        by_reason = {}
+        for row in conn.execute("""
+            SELECT reason, COUNT(*) as cnt
+            FROM epg_failed_matches
+            WHERE generation_id = ?
+            GROUP BY reason
+            ORDER BY cnt DESC
+        """, (generation_id,)):
+            by_reason[row['reason']] = row['cnt']
+
+        # Get timestamp
+        timestamp_row = conn.execute(
+            "SELECT MIN(created_at) FROM epg_failed_matches WHERE generation_id = ?",
+            (generation_id,)
+        ).fetchone()
+        timestamp = timestamp_row[0] if timestamp_row else None
+
+        return {
+            'generation_id': generation_id,
+            'total_count': total,
+            'by_group': by_group,
+            'by_reason': by_reason,
+            'timestamp': timestamp
+        }
+
+
+# =============================================================================
+# EPG Matched Streams Functions
+# =============================================================================
+
+def clear_matched_streams(generation_id: int = None):
+    """
+    Clear matched streams, optionally for a specific generation.
+
+    Args:
+        generation_id: If provided, only clear for that generation.
+                      If None, clear all matched streams.
+    """
+    with db_connection() as conn:
+        if generation_id is not None:
+            conn.execute(
+                "DELETE FROM epg_matched_streams WHERE generation_id = ?",
+                (generation_id,)
+            )
+        else:
+            conn.execute("DELETE FROM epg_matched_streams")
+        conn.commit()
+
+
+def save_matched_streams_batch(matches: list):
+    """
+    Save multiple matched streams in a single transaction.
+
+    Args:
+        matches: List of dicts with keys:
+            - generation_id, group_id, group_name, stream_id, stream_name
+            - event_id, event_name, detected_league, detection_tier
+            - parsed_team1, parsed_team2, home_team, away_team, event_date
+    """
+    if not matches:
+        return
+
+    with db_connection() as conn:
+        conn.executemany("""
+            INSERT INTO epg_matched_streams (
+                generation_id, group_id, group_name, stream_id, stream_name,
+                event_id, event_name, detected_league, detection_tier,
+                parsed_team1, parsed_team2, home_team, away_team, event_date
+            ) VALUES (
+                :generation_id, :group_id, :group_name, :stream_id, :stream_name,
+                :event_id, :event_name, :detected_league, :detection_tier,
+                :parsed_team1, :parsed_team2, :home_team, :away_team, :event_date
+            )
+        """, matches)
+        conn.commit()
+
+
+def get_matched_streams(generation_id: int = None) -> List[Dict]:
+    """
+    Get matched streams, optionally for a specific generation.
+
+    Args:
+        generation_id: If provided, get for that generation.
+                      If None, get for the most recent generation.
+
+    Returns:
+        List of matched stream dicts
+    """
+    with db_connection() as conn:
+        if generation_id is None:
+            # Get most recent generation
+            row = conn.execute(
+                "SELECT MAX(generation_id) FROM epg_matched_streams"
+            ).fetchone()
+            if not row or row[0] is None:
+                return []
+            generation_id = row[0]
+
+        cursor = conn.execute("""
+            SELECT
+                id, generation_id, group_id, group_name, stream_id, stream_name,
+                event_id, event_name, detected_league, detection_tier,
+                parsed_team1, parsed_team2, home_team, away_team, event_date,
+                created_at
+            FROM epg_matched_streams
+            WHERE generation_id = ?
+            ORDER BY group_name, event_date, stream_name
+        """, (generation_id,))
+
+        return [dict(row) for row in cursor.fetchall()]
+
+
+def get_matched_streams_summary() -> Dict:
+    """
+    Get a summary of matched streams from the most recent generation.
+
+    Returns:
+        Dict with:
+            - generation_id: int
+            - total_count: int
+            - by_group: Dict[group_name, count]
+            - by_tier: Dict[tier, count]
+            - by_league: Dict[league, count]
+            - timestamp: str (ISO format)
+    """
+    with db_connection() as conn:
+        # Get most recent generation
+        row = conn.execute(
+            "SELECT MAX(generation_id) FROM epg_matched_streams"
+        ).fetchone()
+        if not row or row[0] is None:
+            return {'generation_id': None, 'total_count': 0, 'by_group': {}, 'by_tier': {}, 'by_league': {}}
+
+        generation_id = row[0]
+
+        # Get total count
+        total = conn.execute(
+            "SELECT COUNT(*) FROM epg_matched_streams WHERE generation_id = ?",
+            (generation_id,)
+        ).fetchone()[0]
+
+        # Get counts by group
+        by_group = {}
+        for row in conn.execute("""
+            SELECT group_name, COUNT(*) as cnt
+            FROM epg_matched_streams
+            WHERE generation_id = ?
+            GROUP BY group_name
+            ORDER BY cnt DESC
+        """, (generation_id,)):
+            by_group[row['group_name']] = row['cnt']
+
+        # Get counts by tier
+        by_tier = {}
+        for row in conn.execute("""
+            SELECT COALESCE(detection_tier, 'unknown') as tier, COUNT(*) as cnt
+            FROM epg_matched_streams
+            WHERE generation_id = ?
+            GROUP BY tier
+            ORDER BY cnt DESC
+        """, (generation_id,)):
+            by_tier[row['tier']] = row['cnt']
+
+        # Get counts by league
+        by_league = {}
+        for row in conn.execute("""
+            SELECT COALESCE(detected_league, 'unknown') as league, COUNT(*) as cnt
+            FROM epg_matched_streams
+            WHERE generation_id = ?
+            GROUP BY league
+            ORDER BY cnt DESC
+        """, (generation_id,)):
+            by_league[row['league']] = row['cnt']
+
+        # Get timestamp
+        timestamp_row = conn.execute(
+            "SELECT MIN(created_at) FROM epg_matched_streams WHERE generation_id = ?",
+            (generation_id,)
+        ).fetchone()
+        timestamp = timestamp_row[0] if timestamp_row else None
+
+        return {
+            'generation_id': generation_id,
+            'total_count': total,
+            'by_group': by_group,
+            'by_tier': by_tier,
+            'by_league': by_league,
+            'timestamp': timestamp
+        }

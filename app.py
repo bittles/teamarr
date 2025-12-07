@@ -243,15 +243,20 @@ def refresh_event_group_core(group, m3u_manager, skip_m3u_refresh=False, epg_sta
     from epg.event_matcher import create_event_matcher
     from epg.event_epg_generator import generate_event_epg
     from epg.epg_consolidator import get_data_dir, after_event_epg_generation
-    from database import get_template, update_event_epg_group_stats
+    from database import get_template, update_event_epg_group_stats, save_failed_matches_batch, save_matched_streams_batch
     from utils.stream_filter import filter_game_streams
     from epg.stream_match_cache import StreamMatchCache, refresh_cached_event
 
     group_id = group['id']
+    group_name = group.get('group_name', f'Group {group_id}')
 
     # Initialize fingerprint cache if generation provided
     stream_cache = StreamMatchCache(get_connection) if generation is not None else None
     cache_stats = {'hits': 0, 'misses': 0, 'stored': 0}
+
+    # Collect matches for debugging
+    failed_matches = []
+    successful_matches = []
 
     # Fetch settings early for use throughout the function
     conn = get_connection()
@@ -680,11 +685,32 @@ def refresh_event_group_core(group, m3u_manager, skip_m3u_refresh=False, epg_sta
         # Process results
         for result in results:
             if result['type'] == 'matched':
+                stream = result['stream']
+                event = result['event']
+                teams = result['teams']
                 matched_streams.append({
-                    'stream': result['stream'],
-                    'teams': result['teams'],
-                    'event': result['event']
+                    'stream': stream,
+                    'teams': teams,
+                    'event': event
                 })
+                # Capture for matched streams log
+                if generation is not None:
+                    successful_matches.append({
+                        'generation_id': generation,
+                        'group_id': group_id,
+                        'group_name': group_name,
+                        'stream_id': stream.get('id'),
+                        'stream_name': stream.get('name', ''),
+                        'event_id': event.get('id', ''),
+                        'event_name': event.get('name', event.get('short_name', '')),
+                        'detected_league': result.get('detected_league'),
+                        'detection_tier': result.get('detection_tier'),
+                        'parsed_team1': teams.get('team1') if teams else None,
+                        'parsed_team2': teams.get('team2') if teams else None,
+                        'home_team': event.get('home_team', {}).get('name', ''),
+                        'away_team': event.get('away_team', {}).get('name', ''),
+                        'event_date': event.get('date', '')
+                    })
             elif result['type'] == 'filtered':
                 reason = result.get('reason')
                 if reason == FilterReason.GAME_FINAL_EXCLUDED:
@@ -696,7 +722,58 @@ def refresh_event_group_core(group, m3u_manager, skip_m3u_refresh=False, epg_sta
                     filtered_league_not_enabled += 1
                 elif reason in (FilterReason.UNSUPPORTED_BEACH_SOCCER, FilterReason.UNSUPPORTED_BOXING_MMA, FilterReason.UNSUPPORTED_FUTSAL):
                     filtered_unsupported_sport += 1
+                # Collect failed matches for reasons that indicate real match failures
+                # (not pre-filters like NO_GAME_INDICATOR which are expected)
+                elif reason in ('NO_LEAGUE_DETECTED', 'NO_GAME_FOUND', 'EVENT_OWNED_BY_OTHER_GROUP'):
+                    if generation is not None:
+                        stream = result.get('stream', {})
+                        failed_matches.append({
+                            'generation_id': generation,
+                            'group_id': group_id,
+                            'group_name': group_name,
+                            'stream_id': stream.get('id'),
+                            'stream_name': stream.get('name', ''),
+                            'reason': reason,
+                            'parsed_team1': None,
+                            'parsed_team2': None,
+                            'detection_tier': result.get('detection_tier'),
+                            'leagues_checked': result.get('leagues_checked'),
+                            'detail': result.get('detail')
+                        })
+            elif result['type'] == 'no_teams':
+                # Teams could not be parsed/matched - this is a real failure
+                if generation is not None:
+                    stream = result.get('stream', {})
+                    parsed_teams = result.get('parsed_teams', {})
+                    failed_matches.append({
+                        'generation_id': generation,
+                        'group_id': group_id,
+                        'group_name': group_name,
+                        'stream_id': stream.get('id'),
+                        'stream_name': stream.get('name', ''),
+                        'reason': result.get('reason', 'NO_TEAMS'),
+                        'parsed_team1': parsed_teams.get('team1') if parsed_teams else None,
+                        'parsed_team2': parsed_teams.get('team2') if parsed_teams else None,
+                        'detection_tier': result.get('detection_tier'),
+                        'leagues_checked': result.get('leagues_checked'),
+                        'detail': result.get('detail')
+                    })
         matched_count = len(matched_streams)
+
+        # Save match data to database for debugging
+        if failed_matches:
+            try:
+                save_failed_matches_batch(failed_matches)
+                app.logger.debug(f"Saved {len(failed_matches)} failed matches for group {group_name}")
+            except Exception as e:
+                app.logger.warning(f"Could not save failed matches: {e}")
+
+        if successful_matches:
+            try:
+                save_matched_streams_batch(successful_matches)
+                app.logger.debug(f"Saved {len(successful_matches)} matched streams for group {group_name}")
+            except Exception as e:
+                app.logger.warning(f"Could not save matched streams: {e}")
 
         # Step 3.5: Include existing managed channels that weren't matched
         # This ensures EPG continues for channels until they're actually deleted
@@ -1008,7 +1085,7 @@ def generate_all_epg(progress_callback=None, settings=None, save_history=True, t
         dict with keys: success, team_stats, event_stats, lifecycle_stats, generation_time, error
     """
     from epg.epg_consolidator import after_team_epg_generation, get_data_dir, finalize_epg_generation
-    from database import save_epg_generation_stats
+    from database import save_epg_generation_stats, clear_failed_matches, clear_matched_streams
     from epg.channel_lifecycle import get_lifecycle_manager
     from epg.stream_match_cache import StreamMatchCache, increment_generation_counter
     import hashlib
@@ -1018,6 +1095,10 @@ def generate_all_epg(progress_callback=None, settings=None, save_history=True, t
     # Increment generation counter for fingerprint cache
     current_generation = increment_generation_counter(get_connection)
     app.logger.debug(f"EPG generation #{current_generation}")
+
+    # Clear previous match data before new generation
+    clear_failed_matches()
+    clear_matched_streams()
 
     def report_progress(status, message, percent=None, **extra):
         """Helper to report progress if callback provided"""
@@ -3409,6 +3490,159 @@ def api_epg_stats_history():
         })
     except Exception as e:
         app.logger.error(f"Error getting EPG history: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@app.route('/api/epg/failed-matches', methods=['GET'])
+def api_epg_failed_matches():
+    """
+    Get failed matches from last EPG generation.
+
+    Returns JSON with failures grouped by group_name, includes generation
+    timestamp and total count for the Failed Matches modal.
+    """
+    from database import get_failed_matches, get_failed_matches_summary
+    try:
+        # Get summary for header info
+        summary = get_failed_matches_summary()
+
+        if summary['generation_id'] is None:
+            return jsonify({
+                'success': True,
+                'has_failures': False,
+                'generation_id': None,
+                'total_count': 0,
+                'groups': [],
+                'by_reason': {},
+                'timestamp': None
+            })
+
+        # Get all failures
+        failures = get_failed_matches(summary['generation_id'])
+
+        # Group failures by group_name
+        groups = {}
+        for failure in failures:
+            group_name = failure['group_name']
+            if group_name not in groups:
+                groups[group_name] = {
+                    'group_name': group_name,
+                    'group_id': failure['group_id'],
+                    'failures': []
+                }
+            groups[group_name]['failures'].append({
+                'stream_id': failure['stream_id'],
+                'stream_name': failure['stream_name'],
+                'reason': failure['reason'],
+                'parsed_team1': failure['parsed_team1'],
+                'parsed_team2': failure['parsed_team2'],
+                'detection_tier': failure['detection_tier'],
+                'leagues_checked': failure['leagues_checked'],
+                'detail': failure['detail']
+            })
+
+        # Convert to sorted list (by failure count desc)
+        groups_list = sorted(
+            groups.values(),
+            key=lambda g: len(g['failures']),
+            reverse=True
+        )
+
+        return jsonify({
+            'success': True,
+            'has_failures': summary['total_count'] > 0,
+            'generation_id': summary['generation_id'],
+            'total_count': summary['total_count'],
+            'group_count': len(groups_list),
+            'groups': groups_list,
+            'by_reason': summary['by_reason'],
+            'timestamp': summary.get('timestamp')
+        })
+
+    except Exception as e:
+        app.logger.error(f"Error getting failed matches: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@app.route('/api/epg/matched-streams', methods=['GET'])
+def api_epg_matched_streams():
+    """
+    Get matched streams from last EPG generation.
+
+    Returns JSON with matches grouped by group_name, includes detection tiers
+    and league info for the Matched Streams modal.
+    """
+    from database import get_matched_streams, get_matched_streams_summary
+    try:
+        # Get summary for header info
+        summary = get_matched_streams_summary()
+
+        if summary['generation_id'] is None:
+            return jsonify({
+                'success': True,
+                'has_matches': False,
+                'generation_id': None,
+                'total_count': 0,
+                'groups': [],
+                'by_tier': {},
+                'by_league': {},
+                'timestamp': None
+            })
+
+        # Get all matches
+        matches = get_matched_streams(summary['generation_id'])
+
+        # Group matches by group_name
+        groups = {}
+        for match in matches:
+            group_name = match['group_name']
+            if group_name not in groups:
+                groups[group_name] = {
+                    'group_name': group_name,
+                    'group_id': match['group_id'],
+                    'matches': []
+                }
+            groups[group_name]['matches'].append({
+                'stream_id': match['stream_id'],
+                'stream_name': match['stream_name'],
+                'event_id': match['event_id'],
+                'event_name': match['event_name'],
+                'detected_league': match['detected_league'],
+                'detection_tier': match['detection_tier'],
+                'parsed_team1': match['parsed_team1'],
+                'parsed_team2': match['parsed_team2'],
+                'home_team': match['home_team'],
+                'away_team': match['away_team'],
+                'event_date': match['event_date']
+            })
+
+        # Convert to sorted list (by match count desc)
+        groups_list = sorted(
+            groups.values(),
+            key=lambda g: len(g['matches']),
+            reverse=True
+        )
+
+        return jsonify({
+            'success': True,
+            'has_matches': summary['total_count'] > 0,
+            'generation_id': summary['generation_id'],
+            'total_count': summary['total_count'],
+            'group_count': len(groups_list),
+            'groups': groups_list,
+            'by_tier': summary['by_tier'],
+            'by_league': summary['by_league'],
+            'timestamp': summary.get('timestamp')
+        })
+
+    except Exception as e:
+        app.logger.error(f"Error getting matched streams: {e}")
         return jsonify({
             'success': False,
             'error': str(e)

@@ -38,7 +38,37 @@ def _get_espn_session() -> requests.Session:
 
 
 class ESPNClient:
-    """Client for ESPN's public API"""
+    """Client for ESPN's public API
+
+    Caches are class-level (shared across all instances) to prevent redundant API calls
+    when multiple EventMatcher, EventEnricher, LeagueDetector instances are created
+    (especially in parallel processing). This reduced scoreboard calls from 1000+ to ~20
+    per EPG generation cycle.
+    """
+
+    # Class-level caches shared across all instances
+    # Key: (sport, league, date), Value: scoreboard data
+    _scoreboard_cache: Dict[tuple, Optional[Dict]] = {}
+    _scoreboard_cache_lock = threading.Lock()
+
+    # Key: (sport, league, team_slug), Value: schedule data
+    _schedule_cache: Dict[tuple, Optional[Dict]] = {}
+    _schedule_cache_lock = threading.Lock()
+
+    # Key: (sport, league, team_id), Value: team info data
+    _team_info_cache: Dict[tuple, Optional[Dict]] = {}
+    _team_info_cache_lock = threading.Lock()
+
+    # Key: (league, team_id), Value: roster data
+    _roster_cache: Dict[tuple, Optional[Dict]] = {}
+    _roster_cache_lock = threading.Lock()
+
+    # Key: (sport, league, group_id), Value: (name, abbreviation)
+    _group_cache: Dict[tuple, tuple] = {}
+    _group_cache_lock = threading.Lock()
+
+    # Cache for team stats (refreshes every 6 hours) - instance level is OK
+    # since this is long-lived and not cleared per-generation
 
     def __init__(self, base_url: str = "https://site.api.espn.com/apis/site/v2/sports", db_path: str = None):
         self.base_url = base_url
@@ -50,35 +80,11 @@ class ESPNClient:
         # Use shared session for connection pooling
         self._session = _get_espn_session()
 
-        # Cache for team stats (refreshes every 6 hours)
+        # Instance-level cache for team stats (refreshes every 6 hours)
+        # This is OK as instance-level since it's long-lived
         self._stats_cache = {}
-        self._stats_cache_lock = threading.Lock()  # Thread-safe cache access
+        self._stats_cache_instance_lock = threading.Lock()
         self._cache_duration = timedelta(hours=6)
-
-        # Cache for team schedules (cleared each EPG generation run)
-        # Key: (sport, league, team_slug), Value: schedule data
-        self._schedule_cache = {}
-        self._schedule_cache_lock = threading.Lock()  # Thread-safe cache access
-
-        # Cache for team info (cleared each EPG generation run)
-        # Key: (sport, league, team_id), Value: team info data
-        self._team_info_cache = {}
-        self._team_info_cache_lock = threading.Lock()
-
-        # Cache for team rosters (cleared each EPG generation run)
-        # Key: (league, team_id), Value: roster data
-        self._roster_cache = {}
-        self._roster_cache_lock = threading.Lock()
-
-        # Cache for group names (cleared each EPG generation run)
-        # Key: (sport, league, group_id), Value: (name, abbreviation)
-        self._group_cache = {}
-        self._group_cache_lock = threading.Lock()
-
-        # Cache for scoreboard data (cleared each EPG generation run)
-        # Key: (sport, league, date), Value: scoreboard data
-        self._scoreboard_cache = {}
-        self._scoreboard_cache_lock = threading.Lock()
 
     def _make_request(self, url: str) -> Optional[Dict]:
         """Make HTTP request with retry logic and connection pooling"""
@@ -223,32 +229,32 @@ class ESPNClient:
 
     def clear_schedule_cache(self):
         """Clear the schedule cache. Call this at the start of each EPG generation."""
-        with self._schedule_cache_lock:
-            self._schedule_cache.clear()
+        with ESPNClient._schedule_cache_lock:
+            ESPNClient._schedule_cache.clear()
         logger.debug("Schedule cache cleared")
 
     def clear_team_info_cache(self):
         """Clear the team info cache. Call this at the start of each EPG generation."""
-        with self._team_info_cache_lock:
-            self._team_info_cache.clear()
+        with ESPNClient._team_info_cache_lock:
+            ESPNClient._team_info_cache.clear()
         logger.debug("Team info cache cleared")
 
     def clear_roster_cache(self):
         """Clear the roster cache. Call this at the start of each EPG generation."""
-        with self._roster_cache_lock:
-            self._roster_cache.clear()
+        with ESPNClient._roster_cache_lock:
+            ESPNClient._roster_cache.clear()
         logger.debug("Roster cache cleared")
 
     def clear_group_cache(self):
         """Clear the group name cache. Call this at the start of each EPG generation."""
-        with self._group_cache_lock:
-            self._group_cache.clear()
+        with ESPNClient._group_cache_lock:
+            ESPNClient._group_cache.clear()
         logger.debug("Group cache cleared")
 
     def clear_scoreboard_cache(self):
         """Clear the scoreboard cache. Call this at the start of each EPG generation."""
-        with self._scoreboard_cache_lock:
-            self._scoreboard_cache.clear()
+        with ESPNClient._scoreboard_cache_lock:
+            ESPNClient._scoreboard_cache.clear()
         logger.debug("Scoreboard cache cleared")
 
     def get_team_info(self, sport: str, league: str, team_id: str) -> Optional[Dict]:

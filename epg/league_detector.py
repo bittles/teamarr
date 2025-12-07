@@ -2102,8 +2102,8 @@ class LeagueDetector:
 
                 event_id = event.get('id')
                 results.append((event_id, event_dt, event_name))
-                # Early exit - found our match
-                return results
+                # Don't early exit - collect all matches so caller can pick best time match
+                # There might be multiple games (e.g., doubleheader, or same-name teams)
 
         return results
 

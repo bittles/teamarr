@@ -399,7 +399,8 @@ class EventMatcher:
         team2_id: str,
         sport: str,
         api_league: str,
-        include_final_events: bool
+        include_final_events: bool,
+        game_time: datetime = None
     ) -> Tuple[List[Dict], Optional[str], Optional[str]]:
         """
         Search scoreboard for games between two teams.
@@ -413,6 +414,9 @@ class EventMatcher:
             sport: Sport type for API call
             api_league: League code for API call
             include_final_events: Whether to include completed events
+            game_time: Optional target time for disambiguation (if provided, only
+                      early-exit on exact time match to handle same-name teams
+                      in different leagues like men's vs women's hockey)
 
         Returns:
             Tuple of (matching_events, skip_reason, error_reason)
@@ -426,7 +430,7 @@ class EventMatcher:
         # Start from -1 (yesterday) to handle timezone edge cases where games
         # listed for Dec 6 in user's local time are Dec 6 in ESPN scoreboard
         # but current UTC date is already Dec 7
-        found_match = False
+        exact_time_match_found = False
         for day_offset in range(-1, self.lookahead_days):
             check_date = now_utc + timedelta(days=day_offset)
             date_str = check_date.strftime('%Y%m%d')
@@ -450,11 +454,27 @@ class EventMatcher:
                 if str(team1_id) in team_ids_in_event and str(team2_id) in team_ids_in_event:
                     candidate_events.append(sb_event)
                     logger.debug(f"[TRACE] _search_scoreboard | candidate: {sb_event.get('name')} on {sb_event.get('date')}")
-                    found_match = True
-                    break  # Found match on this day, no need to check more events
 
-            if found_match:
-                break  # Found match, no need to check more days
+                    # Only early exit if we have an exact time match
+                    # This handles the edge case where men's and women's teams with
+                    # the same name play on the same day (e.g., hockey doubleheaders)
+                    if game_time:
+                        try:
+                            event_date_str = sb_event.get('date', '')
+                            event_dt = datetime.fromisoformat(event_date_str.replace('Z', '+00:00'))
+                            # Check if times match within 5 minutes
+                            time_diff = abs((event_dt - game_time).total_seconds())
+                            if time_diff < 300:  # 5 minutes tolerance
+                                logger.debug(f"[TRACE] _search_scoreboard | exact time match, early exit")
+                                exact_time_match_found = True
+                                break
+                        except (ValueError, TypeError):
+                            pass
+                    # No game_time provided - keep collecting candidates for later selection
+                    # Don't break here; there might be multiple games (men's + women's)
+
+            if exact_time_match_found:
+                break  # Found exact time match, no need to check more days
 
         if not candidate_events:
             logger.debug(f"[TRACE] _search_scoreboard | no candidates found for {team1_id} vs {team2_id}")
@@ -538,7 +558,7 @@ class EventMatcher:
         # This eliminates ~1200 schedule API calls per EPG generation.
         logger.debug(f"[TRACE] Checking scoreboard for {team1_id} vs {team2_id} in {league}")
         matching_events, skip_reason, error = self._search_scoreboard(
-            team1_id, team2_id, sport, api_league, include_final_events
+            team1_id, team2_id, sport, api_league, include_final_events, game_time
         )
 
         if matching_events:

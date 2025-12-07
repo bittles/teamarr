@@ -863,22 +863,24 @@ class ChannelLifecycleManager:
                 profiles_to_add = group_profile_ids - stored_profile_ids
                 profiles_to_remove = stored_profile_ids - group_profile_ids
                 profile_changed = False
-
+                logger.debug(f"stored profile ids not equal to group profile ids, will add or remove")
+                logger.debug(f"stored_profile ids is {stored_profile_ids}, group_profile_ids is {group_profile_ids}")
                 # Serialize Dispatcharr profile operations
                 with self._dispatcharr_lock:
                     # Remove from profiles no longer in the list
-                    for profile_id in profiles_to_remove:
-                        remove_result = self.channel_api.remove_channel_from_profile(
-                            profile_id, dispatcharr_channel_id
-                        )
-                        if remove_result.get('success'):
-                            logger.debug(f"Removed channel {dispatcharr_channel_id} from profile {profile_id}")
-                            profile_changed = True
-                        else:
-                            logger.warning(
-                                f"Failed to remove channel {dispatcharr_channel_id} from profile {profile_id}: "
-                                f"{remove_result.get('error')}"
+                    if len(stored_profile_ids) > len(group_profile_ids):
+                        for profile_id in profiles_to_remove:
+                            remove_result = self.channel_api.remove_channel_from_profile(
+                                profile_id, dispatcharr_channel_id
                             )
+                            if remove_result.get('success'):
+                                logger.debug(f"Removed channel {dispatcharr_channel_id} from profile {profile_id}")
+                                profile_changed = True
+                            else:
+                                logger.warning(
+                                    f"Failed to remove channel {dispatcharr_channel_id} from profile {profile_id}: "
+                                    f"{remove_result.get('error')}"
+                                )
 
                     # Add to new profiles
                     for profile_id in profiles_to_add:

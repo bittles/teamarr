@@ -7161,28 +7161,18 @@ def sync_timezone_from_env():
 def initialize_soccer_cache():
     """
     Initialize soccer multi-league cache on startup.
-    Builds cache if empty, logs migration summary for existing teams.
+    Always refreshes to ensure new leagues are included.
     """
     from epg.soccer_multi_league import SoccerMultiLeague
-    from epg.league_config import is_soccer_league
 
     try:
-        # Check if cache is empty
-        if SoccerMultiLeague.is_cache_empty():
-            app.logger.info("⚽ Soccer league cache is empty, building initial cache...")
-            result = SoccerMultiLeague.refresh_cache()
+        app.logger.info("⚽ Refreshing soccer league cache on startup...")
+        result = SoccerMultiLeague.refresh_cache()
 
-            if result['success']:
-                app.logger.info(f"✅ Soccer cache built: {result['teams_indexed']} teams across {result['leagues_processed']} leagues ({result['duration_seconds']:.1f}s)")
-            else:
-                app.logger.warning(f"⚠️ Soccer cache build failed: {result.get('error', 'Unknown error')}")
+        if result['success']:
+            app.logger.info(f"✅ Soccer cache refreshed: {result['teams_indexed']} teams across {result['leagues_processed']} leagues ({result['duration_seconds']:.1f}s)")
         else:
-            # Cache exists - log status
-            stats = SoccerMultiLeague.get_cache_stats()
-            if stats.is_stale:
-                app.logger.info(f"⚽ Soccer cache is {stats.staleness_days} days old (will refresh per schedule)")
-            else:
-                app.logger.info(f"⚽ Soccer cache ready: {stats.teams_indexed} teams, {stats.leagues_processed} leagues")
+            app.logger.warning(f"⚠️ Soccer cache refresh failed: {result.get('error', 'Unknown error')}")
 
     except Exception as e:
         app.logger.warning(f"⚠️ Soccer cache initialization skipped: {e}")
@@ -7191,27 +7181,18 @@ def initialize_soccer_cache():
 def initialize_team_league_cache():
     """
     Initialize team-league cache on startup.
-    Builds cache if empty, logs status for existing cache.
+    Always refreshes to ensure new leagues are included.
     """
     from epg.team_league_cache import TeamLeagueCache
 
     try:
-        # Check if cache is empty
-        if TeamLeagueCache.is_cache_empty():
-            app.logger.info("🏈 Team-league cache is empty, building initial cache...")
-            result = TeamLeagueCache.refresh_cache()
+        app.logger.info("🏈 Refreshing team-league cache on startup...")
+        result = TeamLeagueCache.refresh_cache()
 
-            if result['success']:
-                app.logger.info(f"✅ Team-league cache built: {result['teams_indexed']} teams across {result['leagues_processed']} leagues ({result['duration_seconds']:.1f}s)")
-            else:
-                app.logger.warning(f"⚠️ Team-league cache build failed: {result.get('error', 'Unknown error')}")
+        if result['success']:
+            app.logger.info(f"✅ Team-league cache refreshed: {result['teams_indexed']} teams across {result['leagues_processed']} leagues ({result['duration_seconds']:.1f}s)")
         else:
-            # Cache exists - log status
-            stats = TeamLeagueCache.get_cache_stats()
-            if stats.is_stale:
-                app.logger.info(f"🏈 Team-league cache is {stats.staleness_days} days old (will refresh per schedule)")
-            else:
-                app.logger.info(f"🏈 Team-league cache ready: {stats.teams_indexed} teams, {stats.leagues_processed} leagues")
+            app.logger.warning(f"⚠️ Team-league cache refresh failed: {result.get('error', 'Unknown error')}")
 
     except Exception as e:
         app.logger.warning(f"⚠️ Team-league cache initialization skipped: {e}")

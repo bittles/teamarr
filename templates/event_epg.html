@@ -307,7 +307,6 @@
                                     </div>
                                     <span class="match-rate-text">
                                         {{ group.matched_count or 0 }}/{{ group.stream_count }} ({{ match_rate }}%)
-                                        {%- if total_excluded > 0 %} <span class="badge badge-league-disabled" title="{{ exclusion_parts | join(', ') }}">+{{ total_excluded }}</span>{% endif %}
                                     </span>
                                 </div>
                                 {% else %}
@@ -410,7 +409,6 @@
                                         </div>
                                         <span class="match-rate-text">
                                             {{ child.matched_count or 0 }}/{{ child.stream_count }} ({{ child_match_rate }}%)
-                                            {%- if child_total_excluded > 0 %} <span class="badge badge-league-disabled" title="{{ child_exclusion_parts | join(', ') }}">+{{ child_total_excluded }}</span>{% endif %}
                                         </span>
                                     </div>
                                     {% else %}

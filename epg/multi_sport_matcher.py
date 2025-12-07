@@ -250,8 +250,10 @@ class MultiSportMatcher:
                     result.reason = diagnosis.get('reason')
                     result.detail = diagnosis.get('detail')
                     result.parsed_teams = {'team1': raw_team1, 'team2': raw_team2}
+                    logger.info(f"[UNMATCHED] {stream_name[:60]}... | reason={result.reason} | {result.detail}")
                 else:
                     result.reason = 'NO_TEAMS'
+                    logger.info(f"[UNMATCHED] {stream_name[:60]}... | reason=NO_TEAMS")
                 return result
 
             # Step 6: If still no league but teams matched, try full detection
@@ -268,6 +270,7 @@ class MultiSportMatcher:
 
             if not detected_league:
                 result.reason = 'NO_LEAGUE_DETECTED'
+                logger.info(f"[UNMATCHED] {stream_name[:60]}... | reason=NO_LEAGUE_DETECTED")
                 return result
 
             # Step 7: Find event in the detected league (with enrichment)
@@ -416,6 +419,7 @@ class MultiSportMatcher:
                 result.team_result = team_result  # Include team info for UI
                 result.parsed_teams = {'team1': raw_team1, 'team2': raw_team2}
                 result.detected_league = detected_league
+                logger.info(f"[UNMATCHED] {stream_name[:60]}... | reason={result.reason} | league={detected_league}")
                 return result
 
         except Exception as e:

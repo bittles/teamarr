@@ -388,7 +388,7 @@ class ESPNClient:
                 return cached_data
 
         # Slow path: acquire lock for cache miss
-        with self._stats_cache_lock:
+        with self._stats_cache_instance_lock:
             # Double-check after acquiring lock (another thread may have populated)
             if cache_key in self._stats_cache:
                 cached_data, cached_time = self._stats_cache[cache_key]

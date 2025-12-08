@@ -809,13 +809,30 @@ class EventMatcher:
         """
         try:
             config = self._get_league_config(league)
-            if not config:
-                logger.warning(f"No config for league {league}")
-                return None
+            if config:
+                api_path = config['api_path']
+                sport = config.get('sport', api_path.split('/')[0])
+                api_league = api_path.split('/')[-1] if '/' in api_path else league
+            else:
+                # Fallback for soccer leagues not in league_config but in soccer cache
+                # (e.g., eng.fa, esp.copa_del_rey, etc.)
+                from database import get_connection
+                conn = get_connection()
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT 1 FROM soccer_leagues_cache WHERE league_slug = ?",
+                    (league,)
+                )
+                is_soccer = cursor.fetchone() is not None
+                conn.close()
 
-            api_path = config['api_path']
-            sport = config.get('sport', api_path.split('/')[0])
-            api_league = api_path.split('/')[-1] if '/' in api_path else league
+                if is_soccer:
+                    sport = 'soccer'
+                    api_league = league
+                    logger.debug(f"get_event_by_id: using soccer fallback for {league}")
+                else:
+                    logger.warning(f"No config for league {league}")
+                    return None
 
             # Use scoreboard API to get the event (faster)
             scoreboard = self.espn.get_scoreboard(sport, api_league)

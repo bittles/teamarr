@@ -261,8 +261,21 @@ class EventTemplateEngine:
 
                 variables['game_day'] = local_datetime.strftime('%A')
                 variables['game_day_short'] = local_datetime.strftime('%a')
-                variables['today_tonight'] = 'tonight' if local_datetime.hour >= 17 else 'today'
-                variables['today_tonight_title'] = 'Tonight' if local_datetime.hour >= 17 else 'Today'
+
+                # Time until game
+                now = datetime.now(game_datetime.tzinfo)
+                time_diff = game_datetime - now
+                days_until = int(time_diff.total_seconds() / 86400)
+
+                variables['days_until'] = str(max(0, days_until))
+
+                # Today vs Tonight based on 5pm cutoff in user's timezone
+                if days_until == 0:
+                    variables['today_tonight'] = 'tonight' if local_datetime.hour >= 17 else 'today'
+                    variables['today_tonight_title'] = 'Tonight' if local_datetime.hour >= 17 else 'Today'
+                else:
+                    variables['today_tonight'] = 'tomorrow night' if local_datetime.hour >= 17 else 'tomorrow'
+                    variables['today_tonight_title'] = 'Tomorrow Night' if local_datetime.hour >= 17 else 'Tomorrow'
 
             except Exception as e:
                 logger.debug(f"Could not parse event date: {e}")

@@ -336,7 +336,7 @@ def get_league_alias(slug: str) -> str:
 #   23: Stream fingerprint cache for EPG generation optimization
 # =============================================================================
 
-CURRENT_SCHEMA_VERSION = 24
+CURRENT_SCHEMA_VERSION = 26
 
 
 def get_schema_version(conn) -> int:
@@ -1667,6 +1667,141 @@ def run_migrations(conn):
             print("    ✅ Migration 24 complete: EPG match tracking tables + triggered_by column")
         except Exception as e:
             print(f"    ⚠️ Migration 24 error: {e}")
+            conn.rollback()
+
+    # =========================================================================
+    # 25. Fix duplicate language keywords in consolidation_exception_keywords
+    # =========================================================================
+    # Language keywords were being inserted on every startup due to missing
+    # UNIQUE constraint. This migration:
+    # 1. Deduplicates existing rows (keeps lowest ID for each keyword)
+    # 2. Recreates table with UNIQUE constraint
+    # 3. Re-inserts default language keywords (INSERT OR IGNORE now works)
+    if current_version < 25:
+        print("  🔄 Migration 25: Fixing duplicate exception keywords...")
+        try:
+            # Step 1: Get unique keywords (keep first occurrence of each)
+            cursor.execute("""
+                SELECT MIN(id) as id, keywords, behavior, MIN(created_at) as created_at
+                FROM consolidation_exception_keywords
+                GROUP BY keywords
+            """)
+            unique_keywords = cursor.fetchall()
+
+            # Step 2: Recreate table with UNIQUE constraint
+            cursor.execute("DROP TABLE IF EXISTS consolidation_exception_keywords")
+            cursor.execute("""
+                CREATE TABLE consolidation_exception_keywords (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    keywords TEXT NOT NULL UNIQUE,
+                    behavior TEXT NOT NULL DEFAULT 'consolidate',
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+            # Step 3: Re-insert unique user keywords (excluding language defaults)
+            language_patterns = [
+                'En Español', 'En Français', '(GER)', '(POR)', '(ITA)', '(ARA)',
+                'Spanish', 'French', 'German', 'Portuguese', 'Italian', 'Arabic'
+            ]
+            user_keywords = []
+            for row in unique_keywords:
+                keywords_str = row[1]
+                is_language = any(pattern in keywords_str for pattern in language_patterns)
+                if not is_language:
+                    user_keywords.append((row[1], row[2], row[3]))
+
+            if user_keywords:
+                cursor.executemany(
+                    "INSERT INTO consolidation_exception_keywords (keywords, behavior, created_at) VALUES (?, ?, ?)",
+                    user_keywords
+                )
+                print(f"    📝 Preserved {len(user_keywords)} user-defined keyword(s)")
+
+            # Step 4: Insert default language keywords (fresh, no duplicates)
+            # First keyword is canonical (shown in EPG variables) - use English names
+            default_keywords = [
+                ('Spanish, En Español, (ESP), Español', 'consolidate'),
+                ('French, En Français, (FRA), Français', 'consolidate'),
+                ('German, (GER), Deutsch', 'consolidate'),
+                ('Portuguese, (POR), Português', 'consolidate'),
+                ('Italian, (ITA), Italiano', 'consolidate'),
+                ('Arabic, (ARA), العربية', 'consolidate'),
+            ]
+            cursor.executemany(
+                "INSERT OR IGNORE INTO consolidation_exception_keywords (keywords, behavior) VALUES (?, ?)",
+                default_keywords
+            )
+
+            conn.commit()
+            migrations_run += 1
+
+            # Count what we ended up with
+            cursor.execute("SELECT COUNT(*) FROM consolidation_exception_keywords")
+            final_count = cursor.fetchone()[0]
+            print(f"    ✅ Migration 25 complete: {final_count} exception keywords (duplicates removed, UNIQUE constraint added)")
+
+        except Exception as e:
+            print(f"    ⚠️ Migration 25 error: {e}")
+            conn.rollback()
+
+    # =========================================================================
+    # 26. Cron-based scheduler (replaces auto_generate_frequency + schedule_time)
+    # =========================================================================
+    if current_version < 26:
+        print("  🔄 Migration 26: Converting to cron-based scheduling...")
+        try:
+            # Add cron_expression column
+            add_columns_if_missing("settings", [
+                ("cron_expression", "TEXT DEFAULT '0 * * * *'"),
+            ])
+
+            # Convert existing settings to cron expression
+            cursor.execute("""
+                SELECT auto_generate_frequency, schedule_time FROM settings WHERE id = 1
+            """)
+            row = cursor.fetchone()
+
+            if row:
+                frequency = row[0] or 'hourly'
+                schedule_time = row[1] or '00'
+
+                if frequency == 'hourly':
+                    # schedule_time is minute (0-59)
+                    try:
+                        minute = int(schedule_time) if schedule_time else 0
+                        minute = max(0, min(59, minute))
+                    except ValueError:
+                        minute = 0
+                    cron_expr = f"{minute} * * * *"
+                else:  # daily
+                    # schedule_time is HH:MM or just HH
+                    try:
+                        if ':' in (schedule_time or ''):
+                            parts = schedule_time.split(':')
+                            hour = int(parts[0])
+                            minute = int(parts[1]) if len(parts) > 1 else 0
+                        else:
+                            hour = int(schedule_time) if schedule_time else 0
+                            minute = 0
+                        hour = max(0, min(23, hour))
+                        minute = max(0, min(59, minute))
+                    except ValueError:
+                        hour = 0
+                        minute = 0
+                    cron_expr = f"{minute} {hour} * * *"
+
+                cursor.execute("""
+                    UPDATE settings SET cron_expression = ? WHERE id = 1
+                """, (cron_expr,))
+                print(f"    📝 Converted {frequency} @ {schedule_time} → cron '{cron_expr}'")
+
+            conn.commit()
+            migrations_run += 1
+            print("    ✅ Migration 26 complete: Cron-based scheduling enabled")
+
+        except Exception as e:
+            print(f"    ⚠️ Migration 26 error: {e}")
             conn.rollback()
 
     # =========================================================================
@@ -3813,7 +3948,12 @@ def find_parent_channel_for_event(parent_group_id: int, event_id: str, exception
         """, (parent_group_id, event_id))
 
 
-def find_any_channel_for_event(event_id: str, exception_keyword: str = None, exclude_group_id: int = None) -> Optional[Dict[str, Any]]:
+def find_any_channel_for_event(
+    event_id: str,
+    exception_keyword: str = None,
+    exclude_group_id: int = None,
+    any_keyword: bool = False
+) -> Optional[Dict[str, Any]]:
     """Find any group's channel for a given event (used by multi-sport groups for overlap handling).
 
     Unlike find_parent_channel_for_event which only searches within a parent group,
@@ -3821,12 +3961,37 @@ def find_any_channel_for_event(event_id: str, exception_keyword: str = None, exc
 
     Args:
         event_id: The ESPN event ID
-        exception_keyword: Optional exception keyword to match
+        exception_keyword: Optional exception keyword to match (ignored if any_keyword=True)
         exclude_group_id: Optional group ID to exclude from search (usually the current group)
+        any_keyword: If True, find any channel for the event regardless of exception_keyword
 
     Returns:
         The matching managed channel record, or None if not found
     """
+    # For cross-group consolidation, find ANY channel for the event (ignore keywords)
+    if any_keyword:
+        if exclude_group_id:
+            return db_fetch_one("""
+                SELECT mc.*, eg.group_name
+                FROM managed_channels mc
+                LEFT JOIN event_epg_groups eg ON mc.event_epg_group_id = eg.id
+                WHERE mc.espn_event_id = ?
+                  AND mc.event_epg_group_id != ?
+                  AND mc.deleted_at IS NULL
+                ORDER BY mc.created_at ASC
+                LIMIT 1
+            """, (event_id, exclude_group_id))
+        else:
+            return db_fetch_one("""
+                SELECT mc.*, eg.group_name
+                FROM managed_channels mc
+                LEFT JOIN event_epg_groups eg ON mc.event_epg_group_id = eg.id
+                WHERE mc.espn_event_id = ?
+                  AND mc.deleted_at IS NULL
+                ORDER BY mc.created_at ASC
+                LIMIT 1
+            """, (event_id,))
+
     if exception_keyword:
         if exclude_group_id:
             return db_fetch_one("""

@@ -862,9 +862,28 @@ class ChannelLifecycleManager:
                     update_managed_channel(existing['id'], {'dispatcharr_stream_id': new_stream_id})
 
             # Check channel_profile_ids (handled separately - profiles maintain channel lists)
-            # Both are lists (or empty lists)
-            group_profile_ids = set(group.get('channel_profile_ids') or [])
-            stored_profile_ids = set(existing.get('channel_profile_ids') or [])
+            # Both should be lists - parse JSON string if needed
+            import json
+            raw_group_profiles = group.get('channel_profile_ids')
+            if isinstance(raw_group_profiles, str):
+                try:
+                    raw_group_profiles = json.loads(raw_group_profiles) or []
+                except (json.JSONDecodeError, TypeError):
+                    raw_group_profiles = []
+            elif not isinstance(raw_group_profiles, list):
+                raw_group_profiles = []
+
+            raw_stored_profiles = existing.get('channel_profile_ids')
+            if isinstance(raw_stored_profiles, str):
+                try:
+                    raw_stored_profiles = json.loads(raw_stored_profiles) or []
+                except (json.JSONDecodeError, TypeError):
+                    raw_stored_profiles = []
+            elif not isinstance(raw_stored_profiles, list):
+                raw_stored_profiles = []
+
+            group_profile_ids = set(raw_group_profiles)
+            stored_profile_ids = set(raw_stored_profiles)
 
             if group_profile_ids != stored_profile_ids:
                 from database import update_managed_channel
@@ -1008,7 +1027,18 @@ class ChannelLifecycleManager:
         channel_start = group.get('channel_start')
         channel_group_id = group.get('channel_group_id')  # Dispatcharr channel group
         stream_profile_id = group.get('stream_profile_id')  # Dispatcharr stream profile
-        channel_profile_ids = group.get('channel_profile_ids') or []  # Dispatcharr channel profiles (list)
+        # Dispatcharr channel profiles - ensure it's a list (could be unparsed JSON string)
+        raw_profile_ids = group.get('channel_profile_ids')
+        if isinstance(raw_profile_ids, str):
+            try:
+                import json
+                channel_profile_ids = json.loads(raw_profile_ids) or []
+            except (json.JSONDecodeError, TypeError):
+                channel_profile_ids = []
+        elif isinstance(raw_profile_ids, list):
+            channel_profile_ids = raw_profile_ids
+        else:
+            channel_profile_ids = []
         create_timing = global_settings['channel_create_timing']
         delete_timing = global_settings['channel_delete_timing']
         sport = group.get('assigned_sport')
@@ -1039,6 +1069,7 @@ class ChannelLifecycleManager:
             stream = matched['stream']
             event = matched['event']
             teams = matched.get('teams', {})
+            cross_group_channel = matched.get('existing_channel')  # Channel from another group
 
             espn_event_id = event.get('id')
             if not espn_event_id:
@@ -1048,64 +1079,145 @@ class ChannelLifecycleManager:
                 })
                 continue
 
-            # Check for exception keyword match (only relevant when base mode is 'consolidate')
+            # Handle cross-group consolidation (stream matches event owned by another group)
+            if cross_group_channel:
+                # Add stream to the existing channel from another group
+                if not stream_exists_on_channel(cross_group_channel['id'], stream['id']):
+                    try:
+                        # Add stream to channel in Dispatcharr
+                        with self._dispatcharr_lock:
+                            current_channel = self.channel_api.get_channel(cross_group_channel['dispatcharr_channel_id'])
+                            if current_channel:
+                                current_streams = current_channel.get('streams', [])
+                                if stream['id'] not in current_streams:
+                                    current_streams.append(stream['id'])
+                                    self.channel_api.update_channel(
+                                        cross_group_channel['dispatcharr_channel_id'],
+                                        {'streams': current_streams}
+                                    )
+
+                        # Track in DB
+                        add_stream_to_channel(
+                            managed_channel_id=cross_group_channel['id'],
+                            dispatcharr_stream_id=stream['id'],
+                            stream_name=stream.get('name', ''),
+                            source_group_id=group['id'],
+                            source_group_type='cross_group',
+                            m3u_account_id=group.get('dispatcharr_account_id'),
+                            m3u_account_name=group.get('account_name')
+                        )
+
+                        results['existing'].append({
+                            'stream': stream['name'],
+                            'channel_id': cross_group_channel['dispatcharr_channel_id'],
+                            'channel_number': cross_group_channel['channel_number'],
+                            'action': 'added_cross_group'
+                        })
+                        logger.info(
+                            f"Added stream '{stream['name']}' to cross-group channel "
+                            f"#{cross_group_channel['channel_number']} (group {cross_group_channel.get('group_id', 'unknown')})"
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to add stream to cross-group channel: {e}")
+                        results['errors'].append({
+                            'stream': stream['name'],
+                            'error': f'Failed to add to cross-group channel: {e}'
+                        })
+                else:
+                    results['existing'].append({
+                        'stream': stream['name'],
+                        'channel_id': cross_group_channel['dispatcharr_channel_id'],
+                        'channel_number': cross_group_channel['channel_number'],
+                        'action': 'already_exists_cross_group'
+                    })
+                continue  # Don't process further - stream is handled
+
+            # Check for exception keyword match
+            # Keywords are detected for ALL duplicate modes because:
+            # 1. Keywords are used for channel naming (via {exception_keyword} template variable)
+            # 2. Keywords can override the effective mode for that specific stream
             matched_keyword = None
             effective_mode = duplicate_mode  # Default to group's duplicate mode
 
-            if exception_keywords and duplicate_mode == 'consolidate':
+            # Use pre-detected keyword from matching phase if available
+            pre_detected_keyword = matched.get('exception_keyword')
+            if pre_detected_keyword:
+                matched_keyword = pre_detected_keyword
+                # Look up the behavior for this keyword
+                _, exception_behavior = check_exception_keyword(stream.get('name', ''), exception_keywords)
+                if exception_behavior:
+                    effective_mode = exception_behavior
+                logger.debug(
+                    f"Stream '{stream['name']}' using pre-detected keyword '{matched_keyword}' "
+                    f"→ behavior: {effective_mode}"
+                )
+            elif exception_keywords:
+                # Fallback: detect from stream name (for streams not processed through MultiSportMatcher)
                 keyword, exception_behavior = check_exception_keyword(stream.get('name', ''), exception_keywords)
                 if keyword:
                     matched_keyword = keyword
-                    effective_mode = exception_behavior
+                    if exception_behavior:
+                        effective_mode = exception_behavior
                     logger.debug(
                         f"Stream '{stream['name']}' matched exception keyword '{keyword}' "
-                        f"→ behavior: {exception_behavior}"
+                        f"→ behavior: {effective_mode}"
                     )
 
-                    # Remove stream from any non-keyword channel for this event
-                    # (handles case where stream was added before keyword was configured)
-                    non_keyword_channel = find_existing_channel(
-                        group_id=group['id'],
-                        event_id=espn_event_id,
-                        exception_keyword=None,
-                        mode='consolidate'
-                    )
-                    if non_keyword_channel and stream_exists_on_channel(non_keyword_channel['id'], stream['id']):
-                        try:
-                            remove_stream_from_channel(non_keyword_channel['id'], stream['id'])
-                            # Also remove from Dispatcharr
-                            with self._dispatcharr_lock:
-                                current_channel = self.channel_api.get_channel(non_keyword_channel['dispatcharr_channel_id'])
-                                if current_channel:
-                                    current_streams = current_channel.get('streams', [])
-                                    if stream['id'] in current_streams:
-                                        current_streams.remove(stream['id'])
-                                        self.channel_api.update_channel(
-                                            non_keyword_channel['dispatcharr_channel_id'],
-                                            {'streams': current_streams}
-                                        )
-                            logger.info(
-                                f"Removed stream '{stream['name']}' from non-keyword channel "
-                                f"'{non_keyword_channel['channel_name']}' (now using keyword '{keyword}')"
-                            )
-                        except Exception as e:
-                            logger.warning(f"Failed to remove stream from non-keyword channel: {e}")
+            # If base mode is 'consolidate' and keyword was matched, remove stream from non-keyword channel
+            # (handles case where stream was added before keyword was configured)
+            if duplicate_mode == 'consolidate' and matched_keyword:
+                non_keyword_channel = find_existing_channel(
+                    group_id=group['id'],
+                    event_id=espn_event_id,
+                    exception_keyword=None,
+                    mode='consolidate'
+                )
+                if non_keyword_channel and stream_exists_on_channel(non_keyword_channel['id'], stream['id']):
+                    try:
+                        remove_stream_from_channel(non_keyword_channel['id'], stream['id'])
+                        # Also remove from Dispatcharr
+                        with self._dispatcharr_lock:
+                            current_channel = self.channel_api.get_channel(non_keyword_channel['dispatcharr_channel_id'])
+                            if current_channel:
+                                current_streams = current_channel.get('streams', [])
+                                if stream['id'] in current_streams:
+                                    current_streams.remove(stream['id'])
+                                    self.channel_api.update_channel(
+                                        non_keyword_channel['dispatcharr_channel_id'],
+                                        {'streams': current_streams}
+                                    )
+                        logger.info(
+                            f"Removed stream '{stream['name']}' from non-keyword channel "
+                            f"'{non_keyword_channel['channel_name']}' (now using keyword '{matched_keyword}')"
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to remove stream from non-keyword channel: {e}")
 
             # V2: Check for existing channel based on duplicate handling mode
-            # For keyword-based consolidation, we need a different lookup strategy
+            # Keyword 'consolidate': all streams with same keyword → one channel (lookup by keyword)
+            # Keyword 'separate': each stream with keyword → its own channel (lookup by stream_id)
+            # No keyword: use group's duplicate_mode
             if matched_keyword and effective_mode == 'consolidate':
-                # Find existing channel for this event+keyword combination
+                # Keyword consolidate: find channel for this event+keyword combination
                 existing = find_existing_channel(
                     group_id=group['id'],
                     event_id=espn_event_id,
                     exception_keyword=matched_keyword,
                     mode='consolidate'
                 )
-            else:
+            elif effective_mode == 'separate':
+                # Separate mode (keyword or stream-based): each stream gets its own channel
                 existing = find_existing_channel(
                     group_id=group['id'],
                     event_id=espn_event_id,
-                    stream_id=stream.get('id') if effective_mode == 'separate' else None,
+                    stream_id=stream.get('id'),
+                    mode='separate'
+                )
+            else:
+                # Default consolidate/ignore without keywords
+                existing = find_existing_channel(
+                    group_id=group['id'],
+                    event_id=espn_event_id,
                     mode=effective_mode
                 )
 
@@ -1174,7 +1286,7 @@ class ChannelLifecycleManager:
                         'action': 'consolidated'
                     })
 
-                else:  # duplicate_mode == 'separate' - channel found for this stream
+                else:  # effective_mode == 'separate' - channel found for this stream
                     results['existing'].append({
                         'stream': stream['name'],
                         'channel_id': existing['dispatcharr_channel_id'],
@@ -1344,8 +1456,25 @@ class ChannelLifecycleManager:
                 # ESPN client returns venue.name (not fullName) and broadcasts as a list
                 venue_obj = event.get('venue', {})
                 venue = venue_obj.get('name', '') or venue_obj.get('fullName', '') if venue_obj else ''
+
+                # Normalize broadcast - handle both string list and dict list formats
                 broadcasts = event.get('broadcasts', [])
-                broadcast = broadcasts[0] if broadcasts else ''
+                broadcast = ''
+                for b in broadcasts:
+                    if b is None:
+                        continue
+                    if isinstance(b, str):
+                        broadcast = b
+                        break
+                    elif isinstance(b, dict):
+                        # Handle {"names": ["ESPN"]} or {"name": "ESPN"} format
+                        names = b.get('names', [])
+                        if names:
+                            broadcast = names[0]
+                            break
+                        elif b.get('name'):
+                            broadcast = b['name']
+                            break
 
                 # Get logo URL from template if present
                 logo_url_source = None
@@ -1858,6 +1987,163 @@ class ChannelLifecycleManager:
 
         return results
 
+    def enforce_cross_group_consolidation(self) -> Dict[str, Any]:
+        """
+        Consolidate multi-sport group channels into single-league group channels.
+
+        When a multi-sport group (e.g., ESPN+) matches an event that a single-league
+        group (e.g., NHL) also has, the multi-sport streams should be added to the
+        single-league channel, and the multi-sport channel should be deleted.
+
+        This enforcement runs every generation to handle:
+        - User changing group settings
+        - Race conditions where multi-sport streams were seen before single-league
+        - Retroactive cleanup of duplicate channels
+
+        Returns:
+            Dict with 'consolidated', 'streams_moved', 'channels_deleted', 'errors'
+        """
+        from database import (
+            get_all_event_epg_groups,
+            get_managed_channels_for_group,
+            add_stream_to_channel,
+            remove_stream_from_channel,
+            stream_exists_on_channel,
+            log_channel_history,
+            find_any_channel_for_event
+        )
+
+        results = {
+            'consolidated': 0,
+            'streams_moved': 0,
+            'channels_deleted': 0,
+            'errors': []
+        }
+
+        # Get all groups to identify multi-sport vs single-league
+        all_groups = get_all_event_epg_groups()
+        multi_sport_groups = {g['id']: g for g in all_groups if g.get('is_multi_sport')}
+        single_league_groups = {g['id']: g for g in all_groups if not g.get('is_multi_sport')}
+
+        if not multi_sport_groups:
+            return results  # No multi-sport groups, nothing to consolidate
+
+        # For each multi-sport group, check for channels that should be consolidated
+        for ms_group_id, ms_group in multi_sport_groups.items():
+            overlap_handling = ms_group.get('overlap_handling', 'add_stream')
+
+            # create_all mode: keep separate channels, no consolidation
+            if overlap_handling == 'create_all':
+                continue
+
+            ms_channels = get_managed_channels_for_group(ms_group_id)
+
+            for ms_channel in ms_channels:
+                event_id = ms_channel.get('espn_event_id')
+                if not event_id:
+                    continue
+
+                # Check if a single-league group has a channel for this event
+                sl_channel = find_any_channel_for_event(
+                    event_id,
+                    exclude_group_id=ms_group_id,
+                    any_keyword=True
+                )
+
+                # Only consolidate if target is from a single-league group
+                if not sl_channel or sl_channel.get('event_epg_group_id') not in single_league_groups:
+                    continue
+
+                # Found a duplicate! Handle based on overlap_handling mode
+                # - add_stream/add_only: Move streams to single-league channel, delete multi-sport
+                # - skip: Just delete multi-sport channel (don't move streams)
+                try:
+                    with self._dispatcharr_lock:
+                        # For add_stream/add_only: move streams before deleting
+                        if overlap_handling in ('add_stream', 'add_only'):
+                            # Get streams from multi-sport channel
+                            ms_dispatcharr = self.channel_api.get_channel(ms_channel['dispatcharr_channel_id'])
+                            if not ms_dispatcharr:
+                                continue
+
+                            ms_streams = ms_dispatcharr.get('streams', [])
+
+                            # Get current streams on single-league channel
+                            sl_dispatcharr = self.channel_api.get_channel(sl_channel['dispatcharr_channel_id'])
+                            if not sl_dispatcharr:
+                                continue
+
+                            sl_streams = sl_dispatcharr.get('streams', [])
+
+                            # Add multi-sport streams to single-league channel
+                            streams_to_add = [s for s in ms_streams if s not in sl_streams]
+                            if streams_to_add:
+                                new_streams = sl_streams + streams_to_add
+                                update_result = self.channel_api.update_channel(
+                                    sl_channel['dispatcharr_channel_id'],
+                                    {'streams': new_streams}
+                                )
+
+                                if update_result.get('success'):
+                                    # Track in DB
+                                    for stream_id in streams_to_add:
+                                        if not stream_exists_on_channel(sl_channel['id'], stream_id):
+                                            add_stream_to_channel(
+                                                managed_channel_id=sl_channel['id'],
+                                                dispatcharr_stream_id=stream_id,
+                                                source_group_id=ms_group_id,
+                                                source_group_type='cross_group',
+                                                stream_name=f"(from {ms_group.get('group_name', 'multi-sport')})"
+                                            )
+                                            results['streams_moved'] += 1
+
+                                    log_channel_history(
+                                        managed_channel_id=sl_channel['id'],
+                                        change_type='stream_added',
+                                        change_source='cross_group_enforcement',
+                                        notes=f"Moved {len(streams_to_add)} stream(s) from multi-sport channel #{ms_channel['channel_number']}"
+                                    )
+
+                        # Delete the multi-sport channel (for add_stream, add_only, and skip)
+                        delete_result = self.channel_api.delete_channel(ms_channel['dispatcharr_channel_id'])
+                        if delete_result.get('success'):
+                            # Mark as deleted in DB
+                            from database import mark_managed_channel_deleted
+                            mark_managed_channel_deleted(ms_channel['id'])
+
+                            action = "Skipped (deleted)" if overlap_handling == 'skip' else "Consolidated into"
+                            log_channel_history(
+                                managed_channel_id=ms_channel['id'],
+                                change_type='deleted',
+                                change_source='cross_group_enforcement',
+                                notes=f"{action} single-league channel #{sl_channel['channel_number']}"
+                            )
+
+                            results['channels_deleted'] += 1
+                            results['consolidated'] += 1
+
+                            action_log = "Deleted" if overlap_handling == 'skip' else "Consolidated"
+                            logger.info(
+                                f"🔄 {action_log} multi-sport channel #{ms_channel['channel_number']} "
+                                f"({'skipped' if overlap_handling == 'skip' else 'into'} single-league channel #{sl_channel['channel_number']}) "
+                                f"(event: {event_id})"
+                            )
+
+                except Exception as e:
+                    logger.warning(f"Failed to consolidate channel {ms_channel.get('channel_number')}: {e}")
+                    results['errors'].append({
+                        'channel_id': ms_channel['dispatcharr_channel_id'],
+                        'error': str(e)
+                    })
+
+        if results['consolidated'] > 0:
+            logger.info(
+                f"🔄 Cross-group consolidation: merged {results['consolidated']} channel(s), "
+                f"moved {results['streams_moved']} stream(s)"
+            )
+
+        return results
+
     def cleanup_deleted_streams(
         self,
         group: Dict,
@@ -1968,6 +2254,85 @@ class ChannelLifecycleManager:
                             'channel_id': channel['dispatcharr_channel_id'],
                             'error': delete_result.get('error')
                         })
+
+        return results
+
+    def cleanup_orphan_dispatcharr_channels(self) -> Dict[str, Any]:
+        """
+        Clean up orphan channels in Dispatcharr that have teamarr-event-* tvg_id
+        but aren't tracked (or are tracked as deleted) in our DB.
+
+        These orphans can occur when:
+        - Dispatcharr delete API call failed but DB was marked deleted
+        - Same event got a new channel, old one wasn't cleaned up
+        - Manual intervention or bugs
+
+        This runs every generation to keep Dispatcharr clean.
+
+        Returns:
+            Dict with 'deleted' count and 'errors' list
+        """
+        from database import get_all_managed_channels
+
+        results = {
+            'deleted': 0,
+            'errors': []
+        }
+
+        try:
+            # Get all teamarr channels from Dispatcharr
+            all_dispatcharr = self.channel_api.get_channels()
+            teamarr_channels = [
+                c for c in all_dispatcharr
+                if (c.get('tvg_id') or '').startswith('teamarr-event-')
+            ]
+
+            if not teamarr_channels:
+                return results
+
+            # Get active DB channels (by dispatcharr_channel_id and UUID)
+            db_channels = get_all_managed_channels(include_deleted=False)
+            active_ids = {c['dispatcharr_channel_id'] for c in db_channels}
+            active_uuids = {c.get('dispatcharr_uuid') for c in db_channels if c.get('dispatcharr_uuid')}
+
+            # Find orphans
+            orphans = [
+                c for c in teamarr_channels
+                if c['id'] not in active_ids and c.get('uuid') not in active_uuids
+            ]
+
+            if not orphans:
+                return results
+
+            logger.info(f"🧹 Found {len(orphans)} orphan Dispatcharr channel(s) to clean up")
+
+            for orphan in orphans:
+                try:
+                    with self._dispatcharr_lock:
+                        delete_result = self.channel_api.delete_channel(orphan['id'])
+
+                    if delete_result.get('success') or 'not found' in str(delete_result.get('error', '')).lower():
+                        results['deleted'] += 1
+                        logger.debug(f"Deleted orphan channel #{int(orphan['channel_number'])} - {orphan['name']}")
+                    else:
+                        results['errors'].append({
+                            'channel_id': orphan['id'],
+                            'channel_name': orphan['name'],
+                            'error': delete_result.get('error')
+                        })
+                except Exception as e:
+                    results['errors'].append({
+                        'channel_id': orphan['id'],
+                        'channel_name': orphan.get('name', 'unknown'),
+                        'error': str(e)
+                    })
+
+            if results['deleted'] > 0:
+                logger.info(f"🧹 Cleaned up {results['deleted']} orphan Dispatcharr channel(s)")
+
+        except Exception as e:
+            logger.warning(f"Error during orphan cleanup: {e}")
+            results['errors'].append({'error': str(e)})
 
         return results
 

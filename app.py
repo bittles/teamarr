@@ -320,6 +320,13 @@ def refresh_event_group_core(group, m3u_manager, skip_m3u_refresh=False, epg_sta
             if filtered_count > 0:
                 app.logger.debug(f"Filtered {filtered_count} non-game streams ({filtered_no_indicator} no indicator, {filtered_include_regex} include regex, {filtered_exclude_regex} exclude regex), {len(streams)} game streams remain")
 
+        # Step 2.6: Pre-extract exception keywords for all streams (once, before matching)
+        # This avoids re-extracting in each matching code path (single-league, multi-sport, cache hit)
+        from utils.keyword_matcher import strip_exception_keywords
+        for stream in streams:
+            _, keyword = strip_exception_keywords(stream.get('name', ''))
+            stream['exception_keyword'] = keyword
+
         # Step 3: Match streams to ESPN events (PARALLEL for speed)
         from concurrent.futures import ThreadPoolExecutor
 
@@ -365,6 +372,9 @@ def refresh_event_group_core(group, m3u_manager, skip_m3u_refresh=False, epg_sta
             thread_team_matcher = create_matcher()
             thread_event_matcher = create_event_matcher(lookahead_days=lookahead_days)
 
+            # Exception keyword was pre-extracted in Step 2.6 and attached to stream dict
+            # Team matcher's _prepare_text_for_parsing() handles stripping for matching
+
             try:
                 # Use selective regex if any individual field is enabled
                 if any_custom_enabled:
@@ -398,7 +408,8 @@ def refresh_event_group_core(group, m3u_manager, skip_m3u_refresh=False, epg_sta
                             'teams': team_result,
                             'event': event_result['event'],
                             'detected_league': group['assigned_league'],
-                            'detection_tier': 'direct'
+                            'detection_tier': 'direct',
+                            'exception_keyword': stream.get('exception_keyword')
                         }
                     else:
                         # No game found with primary team matches - try alternate team combinations
@@ -453,7 +464,8 @@ def refresh_event_group_core(group, m3u_manager, skip_m3u_refresh=False, epg_sta
                                             'teams': alt_team_result,
                                             'event': alt_result['event'],
                                             'detected_league': league,
-                                            'detection_tier': 'direct'
+                                            'detection_tier': 'direct',
+                                            'exception_keyword': stream.get('exception_keyword')
                                         }
 
                         # No match found with any combination
@@ -558,27 +570,65 @@ def refresh_event_group_core(group, m3u_manager, skip_m3u_refresh=False, epg_sta
                     return {'type': 'filtered', 'reason': normalized, 'stream': stream}
 
             # Matched! Now check overlap handling (not in matcher - EPG builder specific)
+            # This handles streams that match events already owned by OTHER groups
+            # Only applies to multi-sport groups - single-league groups handle duplicates
+            # within their own group via duplicate_event_handling
             event = result.event
             event_id = event.get('id')
-            overlap_handling = group.get('overlap_handling', 'consolidate')
+            overlap_handling = group.get('overlap_handling', 'add_stream')
 
-            if overlap_handling == 'consolidate' and event_id:
-                existing_channel = find_any_channel_for_event(event_id, exclude_group_id=group_id)
+            # Check for existing channel in other groups (multi-sport only, except create_all mode)
+            if is_multi_sport and event_id and overlap_handling in ('add_stream', 'add_only', 'skip'):
+                # First try to find channel matching stream's exception keyword
+                stream_keyword = result.exception_keyword
+                existing_channel = None
+                if stream_keyword:
+                    existing_channel = find_any_channel_for_event(
+                        event_id,
+                        exception_keyword=stream_keyword,
+                        exclude_group_id=group_id
+                    )
+                # If no keyword or no match, find any channel for the event
+                if not existing_channel:
+                    existing_channel = find_any_channel_for_event(event_id, exclude_group_id=group_id, any_keyword=True)
                 if existing_channel:
+                    if overlap_handling == 'skip':
+                        # Skip - don't add stream to existing channel
+                        return {
+                            'type': 'filtered',
+                            'reason': 'EVENT_OWNED_BY_OTHER_GROUP',
+                            'stream': stream,
+                            'existing_channel': existing_channel
+                        }
+                    else:
+                        # add_stream or add_only - return as matched but flag for adding to existing channel
+                        return {
+                            'type': 'matched',
+                            'stream': stream,
+                            'teams': result.team_result,
+                            'event': event,
+                            'detected_league': result.detected_league,
+                            'detection_tier': result.detection_tier,
+                            'exception_keyword': result.exception_keyword,
+                            'existing_channel': existing_channel  # Flag to add to this channel
+                        }
+                elif overlap_handling == 'add_only':
+                    # add_only but no existing channel - skip this stream (no new channel creation)
                     return {
                         'type': 'filtered',
-                        'reason': 'EVENT_OWNED_BY_OTHER_GROUP',
-                        'stream': stream,
-                        'existing_channel': existing_channel
+                        'reason': 'NO_EXISTING_CHANNEL',
+                        'stream': stream
                     }
 
+            # No existing channel (and not add_only) or create_all mode - return as normal match
             return {
                 'type': 'matched',
                 'stream': stream,
                 'teams': result.team_result,
                 'event': event,
                 'detected_league': result.detected_league,
-                'detection_tier': result.detection_tier
+                'detection_tier': result.detection_tier,
+                'exception_keyword': result.exception_keyword
             }
 
         # Select the matching function based on mode
@@ -595,6 +645,7 @@ def refresh_event_group_core(group, m3u_manager, skip_m3u_refresh=False, epg_sta
             On cache hit: refresh dynamic fields from ESPN and return cached match
             On cache miss: run full matching, cache successful results
             """
+            from database import find_any_channel_for_event
             nonlocal cache_stats
             stream_id = stream.get('id')
             stream_name = stream.get('name', '')
@@ -618,14 +669,53 @@ def refresh_event_group_core(group, m3u_manager, skip_m3u_refresh=False, epg_sta
                         # Touch cache entry to keep it fresh
                         stream_cache.touch(group_id, stream_id, stream_name, generation)
 
+                        # Check for cross-group consolidation (same logic as non-cached path)
+                        # Only applies to multi-sport groups - single-league groups handle
+                        # duplicates within their own group via duplicate_event_handling
+                        refreshed_event = refreshed.get('event', {})
+                        refreshed_event_id = refreshed_event.get('id')
+                        overlap_handling = group.get('overlap_handling', 'add_stream')
+                        existing_channel = None
+
+                        if is_multi_sport and refreshed_event_id and overlap_handling in ('add_stream', 'add_only', 'skip'):
+                            # First try to find channel matching stream's exception keyword
+                            stream_keyword = stream.get('exception_keyword')
+                            if stream_keyword:
+                                existing_channel = find_any_channel_for_event(
+                                    refreshed_event_id,
+                                    exception_keyword=stream_keyword,
+                                    exclude_group_id=group_id
+                                )
+                            # If no keyword or no match, find any channel for the event
+                            if not existing_channel:
+                                existing_channel = find_any_channel_for_event(refreshed_event_id, exclude_group_id=group_id, any_keyword=True)
+                            if existing_channel:
+                                if overlap_handling == 'skip':
+                                    return {
+                                        'type': 'filtered',
+                                        'reason': 'EVENT_OWNED_BY_OTHER_GROUP',
+                                        'stream': stream,
+                                        'existing_channel': existing_channel
+                                    }
+                                # add_stream or add_only - continue with existing_channel set
+                            elif overlap_handling == 'add_only':
+                                return {
+                                    'type': 'filtered',
+                                    'reason': 'NO_EXISTING_CHANNEL',
+                                    'stream': stream
+                                }
+
+                        # Exception keyword was pre-extracted in Step 2.6 and attached to stream dict
                         return {
                             'type': 'matched',
                             'stream': stream,
                             'teams': refreshed.get('team_result', {}),
-                            'event': refreshed.get('event', {}),
+                            'event': refreshed_event,
                             'detected_league': league,
                             'detection_tier': 'cache',
-                            'from_cache': True
+                            'from_cache': True,
+                            'exception_keyword': stream.get('exception_keyword'),
+                            'existing_channel': existing_channel  # For cross-group consolidation
                         }
 
                 cache_stats['misses'] += 1
@@ -701,7 +791,9 @@ def refresh_event_group_core(group, m3u_manager, skip_m3u_refresh=False, epg_sta
                 matched_streams.append({
                     'stream': stream,
                     'teams': teams,
-                    'event': event
+                    'event': event,
+                    'exception_keyword': result.get('exception_keyword'),
+                    'existing_channel': result.get('existing_channel')  # For cross-group consolidation
                 })
                 # Capture for matched streams log
                 if generation is not None:
@@ -1487,7 +1579,15 @@ def generate_all_epg(progress_callback=None, settings=None, save_history=True, t
                 ordering_results = lifecycle_mgr.enforce_keyword_channel_ordering()
                 channels_reordered = ordering_results.get('reordered', 0)
 
-                lifecycle_stats['channels_deleted'] = disabled_deleted + scheduled_deleted
+                # 3f: Enforce cross-group consolidation (multi-sport → single-league)
+                cross_group_results = lifecycle_mgr.enforce_cross_group_consolidation()
+                cross_group_consolidated = cross_group_results.get('consolidated', 0)
+
+                # 3g: Clean up orphan Dispatcharr channels (teamarr-event-* not in DB)
+                orphan_cleanup = lifecycle_mgr.cleanup_orphan_dispatcharr_channels()
+                orphans_deleted = orphan_cleanup.get('deleted', 0)
+
+                lifecycle_stats['channels_deleted'] = disabled_deleted + scheduled_deleted + cross_group_results.get('channels_deleted', 0) + orphans_deleted
                 lifecycle_stats['streams_moved'] = streams_moved
                 lifecycle_stats['channels_reordered'] = channels_reordered
                 lifecycle_stats['reconciliation'] = reconciliation_stats
@@ -1589,7 +1689,7 @@ def generate_all_epg(progress_callback=None, settings=None, save_history=True, t
                 manager = EPGManager(dispatcharr_url, dispatcharr_username, dispatcharr_password)
 
                 # Use wait_for_refresh to ensure EPG import completes before associating
-                refresh_result = manager.wait_for_refresh(dispatcharr_epg_id, timeout=120)
+                refresh_result = manager.wait_for_refresh(dispatcharr_epg_id, timeout=60)
 
                 if refresh_result.get('success'):
                     duration = refresh_result.get('duration', 0)
@@ -1810,9 +1910,10 @@ def _check_team_league_cache_refresh(settings: dict):
 
 
 def scheduler_loop():
-    """Background thread that runs the scheduler"""
+    """Background thread that runs the scheduler using cron expressions"""
     global scheduler_running, last_run_time
     from datetime import timezone
+    from croniter import croniter
 
     app.logger.info("🚀 EPG Auto-Generation Scheduler started")
 
@@ -1826,8 +1927,9 @@ def scheduler_loop():
                 time.sleep(60)  # Check every minute if disabled
                 continue
 
-            frequency = settings.get('auto_generate_frequency', 'daily')
-            schedule_time = settings.get('schedule_time', '00')
+            # Get cron expression (default: every hour at minute 0)
+            cron_expression = settings.get('cron_expression', '0 * * * *')
+
             # Use UTC for all comparisons to avoid timezone issues
             now = datetime.now(timezone.utc)
 
@@ -1840,58 +1942,30 @@ def scheduler_loop():
             if effective_last_run and effective_last_run.tzinfo is None:
                 effective_last_run = effective_last_run.replace(tzinfo=timezone.utc)
 
-            # Check if it's time to run based on frequency and last run time
+            # Check if it's time to run based on cron expression
             should_run = False
 
-            if frequency == 'hourly':
-                # Run once per hour at the specified minute
-                # schedule_time should be "00" to "59"
-                try:
-                    target_minute = int(schedule_time) if schedule_time else 0
-                    target_minute = max(0, min(59, target_minute))  # Clamp to valid range
-                except ValueError:
-                    target_minute = 0
+            try:
+                # Use effective_last_run as base time for croniter
+                # If never run, use 24 hours ago to catch any missed runs
+                base_time = effective_last_run or (now - timedelta(hours=24))
 
-                if effective_last_run is None:
-                    # Never run before - check if we're past the target minute this hour
-                    if now.minute >= target_minute:
-                        app.logger.debug(f"Scheduler: No previous run, past target minute {target_minute}")
-                        should_run = True
-                else:
-                    # Check if we're in a new hour AND past the target minute
-                    last_hour = effective_last_run.replace(minute=0, second=0, microsecond=0)
-                    current_hour = now.replace(minute=0, second=0, microsecond=0)
-                    if current_hour > last_hour and now.minute >= target_minute:
-                        app.logger.info(f"⏰ New hour detected, past minute {target_minute}, triggering scheduled generation")
-                        should_run = True
+                cron = croniter(cron_expression, base_time)
+                next_run = cron.get_next(datetime)
 
-            elif frequency == 'daily':
-                # Run once per day at the specified time
-                # schedule_time should be "HH:MM" format (e.g., "03:00")
-                try:
-                    if ':' in (schedule_time or ''):
-                        parts = schedule_time.split(':')
-                        target_hour = int(parts[0])
-                        target_minute = int(parts[1]) if len(parts) > 1 else 0
-                    else:
-                        target_hour = int(schedule_time) if schedule_time else 0
-                        target_minute = 0
-                    target_hour = max(0, min(23, target_hour))
-                    target_minute = max(0, min(59, target_minute))
-                except ValueError:
-                    target_hour = 0
-                    target_minute = 0
+                # Make next_run timezone-aware if it isn't
+                if next_run.tzinfo is None:
+                    next_run = next_run.replace(tzinfo=timezone.utc)
 
-                if effective_last_run is None:
-                    # Never run before - check if we're past the target time today
-                    if now.hour > target_hour or (now.hour == target_hour and now.minute >= target_minute):
-                        should_run = True
-                else:
-                    # Check if we're on a new day AND past the target time
-                    if now.date() > effective_last_run.date():
-                        if now.hour > target_hour or (now.hour == target_hour and now.minute >= target_minute):
-                            app.logger.info(f"⏰ New day detected, past {target_hour:02d}:{target_minute:02d}, triggering scheduled generation")
-                            should_run = True
+                if now >= next_run:
+                    app.logger.info(f"⏰ Cron trigger: '{cron_expression}' - scheduled time {next_run.strftime('%H:%M')} reached")
+                    should_run = True
+
+            except Exception as e:
+                app.logger.error(f"Invalid cron expression '{cron_expression}': {e}")
+                # Fall back to hourly at minute 0 if cron is invalid
+                if now.minute == 0 and (effective_last_run is None or now.hour != effective_last_run.hour):
+                    should_run = True
 
             if should_run:
                 run_scheduled_generation()
@@ -2868,7 +2942,7 @@ def settings_update():
             'game_duration_baseball', 'game_duration_soccer',
             'cache_enabled', 'cache_duration_hours',
             'xmltv_generator_name', 'xmltv_generator_url',
-            'auto_generate_enabled', 'auto_generate_frequency', 'schedule_time',
+            'auto_generate_enabled', 'cron_expression',
             'dispatcharr_enabled', 'dispatcharr_url', 'dispatcharr_username',
             'dispatcharr_password', 'dispatcharr_epg_id',
             'channel_create_timing', 'channel_delete_timing', 'include_final_events',
@@ -2892,6 +2966,23 @@ def settings_update():
                         ZoneInfo(value)  # Validate - raises if invalid
                     except Exception:
                         flash(f'Invalid timezone: "{value}". Timezone names are case-sensitive (e.g., America/Chicago, not America/chicago).', 'error')
+                        conn.close()
+                        return redirect(url_for('settings_form'))
+                # Validate cron expression
+                elif field == 'cron_expression':
+                    value = value.strip() if value else '0 * * * *'
+                    # Basic validation: must have 5 fields
+                    parts = value.split()
+                    if len(parts) != 5:
+                        flash('Invalid cron expression: must have 5 fields (minute hour day month weekday)', 'error')
+                        conn.close()
+                        return redirect(url_for('settings_form'))
+                    # Validate with croniter
+                    try:
+                        from croniter import croniter
+                        croniter(value)  # Raises if invalid
+                    except Exception as e:
+                        flash(f'Invalid cron expression: {str(e)}', 'error')
                         conn.close()
                         return redirect(url_for('settings_form'))
                 # Handle numeric fields
@@ -4971,7 +5062,7 @@ def api_event_epg_dispatcharr_streams_sse(group_id):
                             # Cache successful match for future EPG runs
                             if result.event and result.event.get('id'):
                                 event_id = result.event.get('id')
-                                detected_league = result.league or ''
+                                detected_league = result.detected_league or ''
                                 cached_data = {
                                     'event': result.event,
                                     'team_result': result.team_result

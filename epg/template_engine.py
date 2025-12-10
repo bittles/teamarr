@@ -277,7 +277,8 @@ class TemplateEngine:
                 local_datetime = game_datetime.astimezone(ZoneInfo(epg_timezone))
 
                 variables['game_date'] = local_datetime.strftime('%A, %B %d, %Y')
-                variables['game_date_short'] = local_datetime.strftime('%b %d')
+                # variables['game_date_short'] = local_datetime.strftime('%b %d')
+                variables['game_date_short'] = local_datetime.strftime('%-m/%-d')
 
                 # Use user's time format preferences for game_time
                 if time_format_settings:

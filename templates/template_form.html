@@ -1047,12 +1047,33 @@
                                 <span id="preview-idle-title">Pistons Programming</span>
                             </div>
                         </div>
-                        <div class="form-group">
+                        <div class="form-group" id="idle-subtitle-group">
                             <label for="idle_subtitle">Subtitle</label>
                             <input type="text" name="idle_subtitle" id="idle_subtitle" value="{{ template.idle_subtitle if template else 'Next game: {game_date.next} at {game_time.next} {vs_at.next} the {opponent.next}' }}" placeholder="Optional" class="template-field">
                             <div class="inline-preview">
                                 <small>Preview:</small>
                                 <span id="preview-idle-subtitle"></span>
+                            </div>
+                        </div>
+                        <div class="form-group" style="margin-top: 1rem; padding: 1rem; background: var(--bg-tertiary); border-radius: 6px; border: 1px solid var(--border);">
+                            <label style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem;">
+                                <input type="checkbox" name="idle_subtitle_offseason_enabled" id="idle_subtitle_offseason_enabled"
+                                       {% if template and template.idle_subtitle_offseason_enabled %}checked{% endif %}
+                                       onchange="toggleIdleSubtitleOffseason()">
+                                <span>Use conditional subtitle when no games in 30-day lookahead</span>
+                            </label>
+                            <div id="idle-subtitle-offseason-fields" style="{% if not template or not template.idle_subtitle_offseason_enabled %}display: none;{% endif %}">
+                                <div class="form-group" style="margin-bottom: 0;">
+                                    <label for="idle_subtitle_offseason" style="font-size: 0.85rem; color: var(--muted);">📅 No upcoming games:</label>
+                                    <input type="text" name="idle_subtitle_offseason" id="idle_subtitle_offseason"
+                                           value="{{ template.idle_subtitle_offseason if template and template.idle_subtitle_offseason else '' }}"
+                                           class="template-field" placeholder="Optional subtitle when no upcoming games"
+                                           style="border: 1px solid var(--border); background: var(--bg-secondary);">
+                                    <div class="inline-preview">
+                                        <small>Preview:</small>
+                                        <span id="preview-idle-subtitle-offseason"></span>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                         <div class="form-group" id="idle-description-group">
@@ -1061,6 +1082,27 @@
                             <div class="inline-preview">
                                 <small>Preview:</small>
                                 <span id="preview-idle-description">Next game: November 25 at 7:00 PM vs LA Clippers</span>
+                            </div>
+                        </div>
+                        <div class="form-group" style="margin-top: 1rem; padding: 1rem; background: var(--bg-tertiary); border-radius: 6px; border: 1px solid var(--border);">
+                            <label style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem;">
+                                <input type="checkbox" name="idle_offseason_enabled" id="idle_offseason_enabled"
+                                       {% if template and template.idle_offseason_enabled %}checked{% endif %}
+                                       onchange="toggleIdleDescriptionOffseason()">
+                                <span>Use conditional description when no games in 30-day lookahead</span>
+                            </label>
+                            <div id="idle-description-offseason-fields" style="{% if not template or not template.idle_offseason_enabled %}display: none;{% endif %}">
+                                <div class="form-group" style="margin-bottom: 0;">
+                                    <label for="idle_description_offseason" style="font-size: 0.85rem; color: var(--muted);">📅 No upcoming games:</label>
+                                    <input type="text" name="idle_description_offseason" id="idle_description_offseason"
+                                           value="{{ template.idle_description_offseason if template and template.idle_description_offseason else 'No upcoming {team_name} games scheduled.' }}"
+                                           class="template-field" placeholder="No upcoming {team_name} games scheduled."
+                                           style="border: 1px solid var(--border); background: var(--bg-secondary);">
+                                    <div class="inline-preview">
+                                        <small>Preview:</small>
+                                        <span id="preview-idle-description-offseason"></span>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                         <div class="form-group" style="margin-top: 1rem; padding: 1rem; background: var(--bg-tertiary); border-radius: 6px; border: 1px solid var(--border);">
@@ -1288,6 +1330,8 @@ document.addEventListener('DOMContentLoaded', async function() {
 
     // Initialize conditional toggle states on page load
     togglePostgameConditional();
+    toggleIdleSubtitleOffseason();
+    toggleIdleDescriptionOffseason();
     toggleIdleConditional();
 
     // Apply template type visibility (hide conditions tab and idle section for event templates)
@@ -1357,6 +1401,22 @@ function togglePostgameConditional() {
     updatePreviews();
 }
 
+function toggleIdleSubtitleOffseason() {
+    const checkbox = document.getElementById('idle_subtitle_offseason_enabled');
+    const fields = document.getElementById('idle-subtitle-offseason-fields');
+
+    fields.style.display = checkbox.checked ? 'block' : 'none';
+    updatePreviews();
+}
+
+function toggleIdleDescriptionOffseason() {
+    const checkbox = document.getElementById('idle_offseason_enabled');
+    const fields = document.getElementById('idle-description-offseason-fields');
+
+    fields.style.display = checkbox.checked ? 'block' : 'none';
+    updatePreviews();
+}
+
 function toggleIdleConditional() {
     const checkbox = document.getElementById('idle_conditional_enabled');
     const fields = document.getElementById('idle-conditional-fields');
@@ -1365,7 +1425,9 @@ function toggleIdleConditional() {
 
     fields.style.display = checkbox.checked ? 'block' : 'none';
 
-    // Grey out and disable main description when conditional is enabled
+    // Grey out base description ONLY when last game status is enabled
+    // (because final/not-final is binary - one must be true, so base is never used)
+    // Offseason toggle still needs base as fallback when games exist in lookahead
     if (checkbox.checked) {
         mainDescGroup.style.opacity = '0.5';
         mainDescInput.disabled = true;
@@ -1449,6 +1511,14 @@ function updatePreviews() {
     const previewPostgameDescNotFinal = document.getElementById('preview-postgame-description-not-final');
     if (previewPostgameDescNotFinal) previewPostgameDescNotFinal.textContent = replaceVariables(postgameDescNotFinal);
 
+    // Update inline previews for idle offseason subtitle and description
+    const idleSubtitleOffseason = document.getElementById('idle_subtitle_offseason')?.value || '';
+    const previewIdleSubtitleOffseason = document.getElementById('preview-idle-subtitle-offseason');
+    if (previewIdleSubtitleOffseason) previewIdleSubtitleOffseason.textContent = replaceVariables(idleSubtitleOffseason);
+    const idleDescOffseason = document.getElementById('idle_description_offseason')?.value || '';
+    const previewIdleDescOffseason = document.getElementById('preview-idle-description-offseason');
+    if (previewIdleDescOffseason) previewIdleDescOffseason.textContent = replaceVariables(idleDescOffseason);
+
     // Update inline previews for idle conditional descriptions
     const idleDescFinal = document.getElementById('idle_description_final')?.value || '';
     const idleDescNotFinal = document.getElementById('idle_description_not_final')?.value || '';
@@ -1489,8 +1559,9 @@ function updatePreviews() {
 function replaceVariables(template) {
     let result = template;
     for (const [key, value] of Object.entries(sampleData)) {
-        // Get available suffixes for this variable
-        const suffixes = window.variableSuffixMap?.[key] || ['base', 'next', 'last'];
+        // Get available suffixes - check context-specific first, then fall back to default
+        const contextSuffixes = window.variableSuffixByContextMap?.[key]?.[currentTemplateType];
+        const suffixes = contextSuffixes || window.variableSuffixMap?.[key] || ['base', 'next', 'last'];
 
         // Replace base variable {var} if base suffix is available
         if (suffixes.includes('base')) {
@@ -1524,6 +1595,7 @@ async function loadVariablesFromAPI() {
         const categoryMap = {};
         const sampleMap = {};  // Now stores { varName: { NBA: 'val', NFL: 'val', ... } }
         const suffixMap = {}; // Store suffix availability for each variable
+        const suffixByContextMap = {}; // Store context-specific suffix overrides
         const contextMap = {}; // Store context (team/event) for each variable
 
         data.variables.forEach(variable => {
@@ -1553,6 +1625,11 @@ async function loadVariablesFromAPI() {
 
             suffixMap[variable.name] = variable.available_suffixes || ['base', 'next', 'last'];
 
+            // Store context-specific suffixes if available
+            if (variable.available_suffixes_by_context) {
+                suffixByContextMap[variable.name] = variable.available_suffixes_by_context;
+            }
+
             // Store context for filtering (default to both if not specified)
             contextMap[variable.name] = variable.context || ['team', 'event'];
         });
@@ -1565,6 +1642,7 @@ async function loadVariablesFromAPI() {
         TEMPLATE_VARIABLES = categoryMap;
         sampleDataFromAPI = sampleMap;
         window.variableSuffixMap = suffixMap; // Make globally available
+        window.variableSuffixByContextMap = suffixByContextMap; // Context-specific suffixes
         variableContextMap = contextMap; // Store for filtering
 
         // Initialize sampleData for current sport
@@ -1633,6 +1711,7 @@ const TEAM_TEMPLATE_DEFAULTS = {
     'idle_title': 'No {team_name} Game Today',
     'idle_subtitle': 'Next game: {game_date.next} at {game_time.next} {vs_at.next} the {opponent.next}',
     'idle_description': 'Next game: {game_date.next} at {game_time.next} vs {opponent.next}',
+    'idle_description_offseason': 'No upcoming {team_name} games scheduled.',
     'idle_description_final': 'The {team_name} {result_text.last} the {opponent.last} on {game_date.last} {final_score.last} {overtime_text.last}',
     'idle_description_not_final': 'The {team_name} last played against the {opponent.last} on {game_date.last}.'
 };

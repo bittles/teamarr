@@ -173,6 +173,24 @@
                 </div>
             </div>
 
+            <div class="form-row" style="margin-top: 0.75rem;">
+                <div class="form-group">
+                    <label for="channel_range_start">Channel Range Start</label>
+                    <input type="number" id="channel_range_start" name="channel_range_start" class="form-control"
+                           value="{{ settings.channel_range_start if settings.channel_range_start else 101 }}"
+                           min="1" max="9999" placeholder="101">
+                    <small class="form-help">First channel number Teamarr can auto-assign (default: 101)</small>
+                </div>
+
+                <div class="form-group">
+                    <label for="channel_range_end">Channel Range End <span style="color: var(--text-muted); font-weight: normal;">(optional)</span></label>
+                    <input type="number" id="channel_range_end" name="channel_range_end" class="form-control"
+                           value="{{ settings.channel_range_end if settings.channel_range_end else '' }}"
+                           min="1" max="9999" placeholder="No limit">
+                    <small class="form-help">Leave empty for no limit (Dispatcharr max: 9999)</small>
+                </div>
+            </div>
+
             <!-- Exception Keywords Section (only visible when consolidate selected) -->
             <div id="exception-keywords-section" class="form-row" style="margin-top: 0.75rem; display: none;">
                 <div class="form-group" style="width: 100%;">
@@ -336,7 +354,7 @@
                     </div>
                 </div>
                 <small style="color: var(--text-muted); font-size: 0.6875rem;">
-                    Format: minute hour day month weekday (UTC) &bull;
+                    Format: minute hour day month weekday (uses your timezone) &bull;
                     <a href="https://crontab.guru/" target="_blank" style="color: var(--primary);">crontab.guru</a>
                 </small>
             </div>

@@ -93,6 +93,10 @@ CITY_NAME_VARIANTS = {
     # Italian team name variants → ESPN canonical
     'inter milan': 'internazionale',
     'inter': 'internazionale',
+    # College team aliases (stream name → ESPN name)
+    'albany': 'ualbany',
+    'st leo': 'saint leo',
+    'st. leo': 'saint leo',
 }
 
 
@@ -218,8 +222,8 @@ def extract_date_from_text(text: str) -> Optional[datetime]:
     # Current year for relative dates
     current_year = datetime.now().year
 
-    # Pattern 1: ISO format (2025-11-30) or with time (2025-11-30T18:00:05) or ISO format with spaces (2025 11 30) or with time (2025 11 30 18:00:05)
-    iso_match = re.search(r'(\d{4})(?:-|\s)(\d{2})(?:-|\s)(\d{2})', text)
+    # Pattern 1: ISO format (2025-11-30) or with time (2025-11-30T18:00:05)
+    iso_match = re.search(r'(\d{4})-(\d{2})-(\d{2})', text)
     if iso_match:
         try:
             return datetime(
@@ -230,8 +234,8 @@ def extract_date_from_text(text: str) -> Optional[datetime]:
         except ValueError:
             pass
 
-    # Pattern 2: US format with year (11/30/2025 or 11/30/25 or 11.30.2025 or 11.30.25)
-    us_full_match = re.search(r'(\d{1,2})(?:/|\.)(\d{1,2})(?:/|\.)(\d{2,4})', text)
+    # Pattern 2: US format with year (11/30/2025 or 11/30/25)
+    us_full_match = re.search(r'(\d{1,2})/(\d{1,2})/(\d{2,4})', text)
     if us_full_match:
         try:
             year = int(us_full_match.group(3))
@@ -245,8 +249,8 @@ def extract_date_from_text(text: str) -> Optional[datetime]:
         except ValueError:
             pass
 
-    # Pattern 3: US format without year (11/30 or 11.30)
-    us_short_match = re.search(r'(\d{1,2})(?:/|\.)(\d{1,2})(?!\d)', text)
+    # Pattern 3: US format without year (11/30)
+    us_short_match = re.search(r'(\d{1,2})/(\d{1,2})(?!\d)', text)
     if us_short_match:
         try:
             month = int(us_short_match.group(1))
@@ -286,25 +290,6 @@ def extract_date_from_text(text: str) -> Optional[datetime]:
         try:
             month = month_names.get(text_month_match.group(1).lower())
             day = int(text_month_match.group(2))
-            if month:
-                date = datetime(current_year, month, day)
-                if (datetime.now() - date).days > 180:
-                    date = datetime(current_year + 1, month, day)
-                return date
-        except ValueError:
-            pass
-
-    # Pattern 5: Reverse text month format (30 Nov, 30 November, 30th Nov, 30th November)
-    text_month_match_reverse = re.search(
-        r'(\d{1,2})(?:st|nd|rd|th)?\s+(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|'
-        r'apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|'
-        r'nov(?:ember)?|dec(?:ember)?)',
-        text.lower()
-    )
-    if text_month_match_reverse:
-        try:
-            month = month_names.get(text_month_match_reverse.group(2).lower())
-            day = int(text_month_match_reverse.group(1))
             if month:
                 date = datetime(current_year, month, day)
                 if (datetime.now() - date).days > 180:

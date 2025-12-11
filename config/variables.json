@@ -486,6 +486,102 @@
       ]
     },
     {
+      "name": "league_id",
+      "description": "League code (uses alias if defined, else ESPN slug)",
+      "source": "league_id_aliases table or ESPN slug",
+      "category": "🏷️ Team Identity",
+      "icon": "🏀",
+      "type": "string",
+      "availability": "always",
+      "sports": [
+        "basketball",
+        "football",
+        "hockey",
+        "baseball",
+        "soccer"
+      ],
+      "available_suffixes": [
+        "base"
+      ],
+      "examples_by_sport": {
+        "NBA": "nba",
+        "NFL": "nfl",
+        "MLB": "mlb",
+        "NHL": "nhl",
+        "NCAAM": "ncaam",
+        "NCAAF": "ncaaf",
+        "Soccer": "epl"
+      },
+      "context": [
+        "team",
+        "event"
+      ]
+    },
+    {
+      "name": "league_slug",
+      "description": "Raw ESPN league slug (ignores alias mapping)",
+      "source": "ESPN API slug",
+      "category": "🏷️ Team Identity",
+      "icon": "🏀",
+      "type": "string",
+      "availability": "always",
+      "sports": [
+        "basketball",
+        "football",
+        "hockey",
+        "baseball",
+        "soccer"
+      ],
+      "available_suffixes": [
+        "base"
+      ],
+      "examples_by_sport": {
+        "NBA": "nba",
+        "NFL": "nfl",
+        "MLB": "mlb",
+        "NHL": "nhl",
+        "NCAAM": "mens-college-basketball",
+        "NCAAF": "college-football",
+        "Soccer": "eng.1"
+      },
+      "context": [
+        "team",
+        "event"
+      ]
+    },
+    {
+      "name": "gracenote_category",
+      "description": "Gracenote-compatible category (e.g., 'College Basketball', 'NFL Football')",
+      "source": "League config or auto-generated",
+      "category": "\ud83c\udff7\ufe0f Team Identity",
+      "icon": "\ud83c\udfc6",
+      "type": "string",
+      "availability": "always",
+      "sports": [
+        "basketball",
+        "football",
+        "hockey",
+        "baseball",
+        "soccer"
+      ],
+      "available_suffixes": [
+        "base"
+      ],
+      "examples_by_sport": {
+        "NBA": "NBA Basketball",
+        "NFL": "NFL Football",
+        "MLB": "MLB Baseball",
+        "NHL": "NHL Hockey",
+        "NCAAM": "College Basketball",
+        "NCAAF": "College Football",
+        "Soccer": "Premier League Soccer"
+      },
+      "context": [
+        "team",
+        "event"
+      ]
+    },
+    {
       "name": "soccer_match_league",
       "description": "Competition name for this specific match (changes per game)",
       "source": "Event source league",
@@ -621,6 +717,37 @@
         "NCAAM": "Basketball",
         "NCAAF": "Football",
         "Soccer": "Soccer"
+      },
+      "context": [
+        "team",
+        "event"
+      ]
+    },
+    {
+      "name": "sport_lower",
+      "description": "Sport name (lowercase)",
+      "source": "Derived from sport",
+      "category": "🏷️ Team Identity",
+      "icon": "🏀",
+      "type": "string",
+      "availability": "always",
+      "sports": [
+        "basketball",
+        "football",
+        "hockey",
+        "baseball"
+      ],
+      "available_suffixes": [
+        "base"
+      ],
+      "examples_by_sport": {
+        "NBA": "basketball",
+        "NFL": "football",
+        "MLB": "baseball",
+        "NHL": "hockey",
+        "NCAAM": "basketball",
+        "NCAAF": "football",
+        "Soccer": "soccer"
       },
       "context": [
         "team",
@@ -1736,13 +1863,13 @@
         "last"
       ],
       "examples_by_sport": {
-        "NBA": "11/24",
-        "NFL": "11/27",
-        "MLB": "4/4",
-        "NHL": "11/29",
-        "NCAAM": "1/14",
-        "NCAAF": "11/29",
-        "Soccer": "12/1"
+        "NBA": "Nov 24",
+        "NFL": "Nov 27",
+        "MLB": "Apr 04",
+        "NHL": "Nov 29",
+        "NCAAM": "Jan 14",
+        "NCAAF": "Nov 29",
+        "Soccer": "Dec 01"
       },
       "context": [
         "team",
@@ -2327,6 +2454,10 @@
       "available_suffixes": [
         "last"
       ],
+      "available_suffixes_by_context": {
+        "team": ["last"],
+        "event": ["base"]
+      },
       "examples_by_sport": {
         "NBA": "in overtime",
         "NFL": "in overtime",

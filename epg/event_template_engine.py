@@ -195,10 +195,14 @@ class EventTemplateEngine:
             'soccer': 'Soccer'
         }
         variables['sport'] = sport_display_names.get(sport_code, sport_code.capitalize())
+        variables['sport_lower'] = variables['sport'].lower()
 
         # Get league from event first (for multi-sport), then group (for single-sport)
         # event['league'] contains the ESPN slug (e.g., 'aus.1', 'eng.1', 'nfl')
         event_league = event.get('league', '') or group_info.get('assigned_league', '')
+
+        # {league_slug} - Always the raw ESPN slug (e.g., 'womens-college-basketball', 'eng.1')
+        variables['league_slug'] = event_league.lower() if event_league else ''
 
         # {league_id} - Check aliases table for friendly name, fallback to ESPN slug
         # This ensures consistent output whether from single-sport or multi-sport groups
@@ -236,6 +240,15 @@ class EventTemplateEngine:
         variables['league'] = league_display_name or event_league.upper()
         # {league_name} is the full display name (e.g., "English Premier League")
         variables['league_name'] = league_display_name
+
+        # Gracenote-compatible category (e.g., "College Basketball", "NFL Football")
+        # Uses curated value from league_config, falls back to "{league_name} {Sport}"
+        from database import get_gracenote_category
+        variables['gracenote_category'] = get_gracenote_category(
+            event_league.lower() if event_league else '',
+            league_display_name,
+            sport_code
+        )
 
         # =====================================================================
         # DATE & TIME

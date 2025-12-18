@@ -281,8 +281,11 @@ class EventTemplateEngine:
 
                 variables['days_until'] = str(max(0, days_until))
 
+                game_date_compare = game_datetime.date()
+                now_date_compare = now.date()
+
                 # Today vs Tonight based on 5pm cutoff in user's timezone
-                if days_until == 0:
+                if game_date_compare == now_date_compare:
                     variables['today_tonight'] = 'tonight' if local_datetime.hour >= 17 else 'today'
                     variables['today_tonight_title'] = 'Tonight' if local_datetime.hour >= 17 else 'Today'
                 else:

@@ -306,7 +306,7 @@ class TemplateEngine:
 
                 variables['days_until'] = str(max(0, days_until))
 
-                game_date_compare = game_datetime.date()
+                game_date_compare = local_datetime.date()
                 now_date_compare = now.date()
 
                 # Today vs Tonight based on 5pm cutoff in user's timezone

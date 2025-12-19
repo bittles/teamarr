@@ -317,8 +317,80 @@ def extract_date_from_text(text: str) -> Optional[datetime]:
         except ValueError:
             pass
 
+    try:
+        date_from_day_of_week = find_closest_day_date(text)
+        return date_from_day_of_week
+    except ValueError:
+        pass
+
     return None
 
+def find_closest_day_date(text_string: str) -> Optional[datetime]:
+    """
+    Searches a string for the day of the week, or applies a default based on time.
+    
+    Rules for Default:
+    1. If no day is found, and '8:15' is in the string, assume Thursday.
+    2. Otherwise (if no day and no '8:15'), default to Sunday.
+
+    Args:
+        text_string: The string to search.
+
+    Returns:
+        A datetime.date object representing the closest occurrence of that day.
+    """
+    
+   # 1. Standardized day mapping (all lowercase)
+    day_map = {
+        'monday': 0, 'mon': 0, 'mnf': 0, 
+        'tuesday': 1, 'tue': 1, 
+        'wednesday': 2, 'wed': 2, 
+        'thursday': 3, 'thu': 3, 'tnf': 3, 
+        'friday': 4, 'fri': 4, 
+        'saturday': 5, 'sat': 5, 
+        'sunday': 6, 'sun': 6, 'snf': 6
+    }
+
+    # Prepare regex
+    all_patterns = '|'.join(re.escape(k) for k in day_map.keys())
+    day_pattern = re.compile(r'\b(' + all_patterns + r')\b', re.IGNORECASE)
+    time_pattern = re.compile(r'8:15')
+
+    # 2. Extract the Day or Apply Default Logic
+    match = day_pattern.search(text_string)
+    
+    if match:
+        matched_key = match.group(1).lower()
+        target_day_index = day_map[matched_key]
+    else:
+        # No day found, check time for conditional default
+        if time_pattern.search(text_string):
+            # Rule 1: No day, but time is 8:15 -> Assume Thursday
+            target_day_index = 3  # Thursday
+        else:
+            # Rule 2: No day and not 8:15 -> Default to Sunday
+            target_day_index = 6  # Sunday
+
+    # 3. Calculate the Closest Date
+    today = datetime.now().date()
+    today_index = today.weekday() # Friday = 4
+
+    diff = target_day_index - today_index
+    this_week_date = today + timedelta(days=diff)
+
+    # Check candidates (Last week, This week, Next week)
+    candidates = [
+        this_week_date - timedelta(days=7),
+        this_week_date,
+        this_week_date + timedelta(days=7)
+    ]
+    
+    # Return the date with the smallest absolute difference from today
+    # If there's a tie, min() picks the first one; 
+    # using a custom key ensures we get the closest.
+    closest_date = min(candidates, key=lambda d: abs(d - today))
+
+    return closest_date
 
 def extract_time_from_text(text: str) -> Optional[datetime]:
     """

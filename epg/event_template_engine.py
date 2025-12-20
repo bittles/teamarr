@@ -285,18 +285,16 @@ class EventTemplateEngine:
 
                 variables['days_until'] = str(max(0, days_until))
 
-                game_date_compare = local_datetime.date()
-                game_date_compare2 = local_datetime.date()
-                now_date_compare = now.astimezone(ZoneInfo(epg_timezone)).date()
-                now_date_compare2 = now.astimezone(ZoneInfo(epg_timezone))
+                game_date_compare = game_datetime.date()
+                now_date_compare = now.date()
 
                 # Today vs Tonight based on 5pm cutoff in user's timezone
                 if game_date_compare == now_date_compare:
-                    variables['today_tonight'] = f'tonight {days_until} {game_date_compare2} {now_date_compare2}' if local_datetime.hour >= 17 else f"today {days_until} {game_date_compare2} {now_date_compare2}"
-                    variables['today_tonight_title'] = f'Tonight {days_until} {game_date_compare2} {now_date_compare2}' if local_datetime.hour >= 17 else f"Today {days_until} {game_date_compare2} {now_date_compare2}"
+                    variables['today_tonight'] = 'tonight' if local_datetime.hour >= 17 else 'today'
+                    variables['today_tonight_title'] = 'Tonight' if local_datetime.hour >= 17 else 'Today'
                 else:
-                    variables['today_tonight'] = f"tomorrow night {days_until} {game_date_compare2} {now_date_compare2}" if local_datetime.hour >= 17 else f"tomorrow {days_until} {game_date_compare2} {now_date_compare2}"
-                    variables['today_tonight_title'] = f"Tomorrow Night {days_until} {game_date_compare2} {now_date_compare2}" if local_datetime.hour >= 17 else f"Tomorrow {days_until} {game_date_compare2} {now_date_compare2}"
+                    variables['today_tonight'] = 'tomorrow night' if local_datetime.hour >= 17 else 'tomorrow'
+                    variables['today_tonight_title'] = 'Tomorrow Night' if local_datetime.hour >= 17 else 'Tomorrow'
 
             except Exception as e:
                 logger.debug(f"Could not parse event date: {e}")

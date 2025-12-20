@@ -285,8 +285,8 @@ class EventTemplateEngine:
 
                 variables['days_until'] = str(max(0, days_until))
 
-                game_date_compare = game_datetime.date()
-                now_date_compare = now.date()
+                game_date_compare = local_datetime.date()
+                now_date_compare = now.astimezone(ZoneInfo(epg_timezone)).date()
 
                 # Today vs Tonight based on 5pm cutoff in user's timezone
                 if game_date_compare == now_date_compare:

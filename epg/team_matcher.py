@@ -897,10 +897,11 @@ class TeamMatcher:
         Find and mask all date patterns in text, returning masked text and positions.
 
         Handles:
-        - ISO: 2025-11-30
-        - US with year: 11/30/2025, 11/30/25
-        - US without year: 11/30
+        - ISO: 2025-11-30, 2025 11 30
+        - US with year: 11/30/2025, 11/30/25, 11.30.2025, 11.30.25
+        - US without year: 11/30, 11.30
         - Text month: Nov 30, November 30
+        - Reverse text month: 30 Nov, 30 November, 30th Nov, 30th November
 
         Args:
             text: Raw text that may contain dates
@@ -911,18 +912,18 @@ class TeamMatcher:
         masked = text
         found_dates = []
 
-        # Pattern 1: ISO format (2025-11-30)
-        iso_pattern = re.compile(r'\d{4}-\d{2}-\d{2}')
+        # Pattern 1: ISO format (2025-11-30) or ISO format with spaces (2025 11 30)
+        iso_pattern = re.compile(r'\d{4}(?:-|\s)\d{2}(?:-|\s)\d{2}')
         for match in iso_pattern.finditer(text):
             found_dates.append((match.group(0), match.start(), match.end()))
 
-        # Pattern 2: US format with year (11/30/2025 or 11/30/25)
-        us_full_pattern = re.compile(r'\d{1,2}/\d{1,2}/\d{2,4}')
+        # Pattern 2: US format with year (11/30/2025 or 11/30/25 or 11.30.2025 or 11.30.25)
+        us_full_pattern = re.compile(r'\d{1,2}(?:/|\.)\d{1,2}(?:/|\.)\d{2,4}')
         for match in us_full_pattern.finditer(text):
             found_dates.append((match.group(0), match.start(), match.end()))
 
-        # Pattern 3: US format without year (11/30) - avoid matching if already part of longer pattern
-        us_short_pattern = re.compile(r'\d{1,2}/\d{1,2}(?!/)')
+        # Pattern 3: US format without year (11/30 or 11.30) - avoid matching if already part of longer pattern
+        us_short_pattern = re.compile(r'\d{1,2}(?:/|\.)\d{1,2}(?!/)')
         for match in us_short_pattern.finditer(text):
             overlap = False
             for _, start, end in found_dates:
@@ -940,6 +941,16 @@ class TeamMatcher:
             re.IGNORECASE
         )
         for match in text_month_pattern.finditer(text):
+            found_dates.append((match.group(0), match.start(), match.end()))
+
+        # Pattern 5: Reverse text month format (30 Nov, 30 November, 30th Nov, 30th November)
+        text_month_pattern_reverse = re.compile(
+            r'\d{1,2}(?:st|nd|rd|th)?\s+(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|'
+            r'apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|'
+            r'nov(?:ember)?|dec(?:ember)?)',
+            re.IGNORECASE
+        )
+        for match in text_month_pattern_reverse.finditer(text):
             found_dates.append((match.group(0), match.start(), match.end()))
 
         # Sort by position (reverse) for replacement

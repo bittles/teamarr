@@ -389,6 +389,7 @@ def find_closest_day_date(text_string: str) -> Optional[datetime]:
     # If there's a tie, min() picks the first one; 
     # using a custom key ensures we get the closest.
     closest_date = min(candidates, key=lambda d: abs(d - today))
+    closest_date = datetime.combine(closest_date, datetime.min.time())
 
     return closest_date
 

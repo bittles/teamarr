@@ -227,7 +227,7 @@ def extract_date_from_text(text: str) -> Optional[datetime]:
     if iso_match:
         try:
             date = datetime(int(iso_match.group(1)), int(iso_match.group(2)), int(iso_match.group(3)))
-            logger.debug(f"iso_match giving {date}")
+            logger.debug(f"iso_match giving {date} from {text}")
             return date
         except ValueError:
             pass
@@ -240,7 +240,7 @@ def extract_date_from_text(text: str) -> Optional[datetime]:
             if year < 100:
                 year += 2000
             date = datetime(year, int(us_full_match.group(1)), int(us_full_match.group(2)))
-            logger.debug(f"us_full_match giving {date}")
+            logger.debug(f"us_full_match giving {date} from {text}")
             return date
         except ValueError:
             pass
@@ -256,7 +256,7 @@ def extract_date_from_text(text: str) -> Optional[datetime]:
             # If date is more than 6 months in the past, assume next year
             if (datetime.now() - date).days > 180:
                 date = datetime(current_year + 1, month, day)
-            logger.debug(f"us_short_match giving {date}")
+            logger.debug(f"us_short_match giving {date} from {text}")
             return date
         except ValueError:
             pass
@@ -291,7 +291,7 @@ def extract_date_from_text(text: str) -> Optional[datetime]:
                 date = datetime(current_year, month, day)
                 if (datetime.now() - date).days > 180:
                     date = datetime(current_year + 1, month, day)
-                logger.debug(f"text_month_match giving {date}")
+                logger.debug(f"text_month_match giving {date} from {text}")
                 return date
         except ValueError:
             pass
@@ -311,14 +311,14 @@ def extract_date_from_text(text: str) -> Optional[datetime]:
                 date = datetime(current_year, month, day)
                 if (datetime.now() - date).days > 180:
                     date = datetime(current_year + 1, month, day)
-                logger.debug(f"text_month_match_reverse giving {date}")
+                logger.debug(f"text_month_match_reverse giving {date} from {text}")
                 return date
         except ValueError:
             pass
 
     try:
         date = find_closest_day_date(text)
-        logger.debug(f"find_closest_day_date giving {date}")
+        logger.debug(f"find_closest_day_date giving {date} from {text}")
         return date
     except ValueError:
         pass
@@ -389,7 +389,6 @@ def find_closest_day_date(text_string: str) -> Optional[datetime]:
     # If there's a tie, min() picks the first one; 
     # using a custom key ensures we get the closest.
     closest_date = min(candidates, key=lambda d: abs(d - today))
-    logger.debug(f"find_closest_day_date giving {closest_date}")
 
     return closest_date
 

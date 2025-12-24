@@ -379,11 +379,11 @@ def find_closest_day_date(text_string: str) -> Optional[datetime]:
     this_week_date = today + timedelta(days=diff)
 
     # Check candidates (Last week, This week, Next week)
-    candidates = [
-        this_week_date - timedelta(days=7),
-        this_week_date,
-        this_week_date + timedelta(days=7)
-    ]
+    candidates = [this_week_date]
+#        this_week_date - timedelta(days=7),
+#        this_week_date,
+#        this_week_date + timedelta(days=7)
+#    ]
     
     # Return the date with the smallest absolute difference from today
     # If there's a tie, min() picks the first one; 

@@ -226,11 +226,9 @@ def extract_date_from_text(text: str) -> Optional[datetime]:
     iso_match = re.search(r'(\d{4})(?:-|\s)(\d{2})(?:-|\s)(\d{2})', text)
     if iso_match:
         try:
-            return datetime(
-                int(iso_match.group(1)),
-                int(iso_match.group(2)),
-                int(iso_match.group(3))
-            )
+            date = datetime(int(iso_match.group(1)), int(iso_match.group(2)), int(iso_match.group(3)))
+            logger.debug(f"iso_match giving {date}")
+            return date
         except ValueError:
             pass
 
@@ -241,11 +239,9 @@ def extract_date_from_text(text: str) -> Optional[datetime]:
             year = int(us_full_match.group(3))
             if year < 100:
                 year += 2000
-            return datetime(
-                year,
-                int(us_full_match.group(1)),
-                int(us_full_match.group(2))
-            )
+            date = datetime(year, int(us_full_match.group(1)), int(us_full_match.group(2)))
+            logger.debug(f"us_full_match giving {date}")
+            return date
         except ValueError:
             pass
 
@@ -260,6 +256,7 @@ def extract_date_from_text(text: str) -> Optional[datetime]:
             # If date is more than 6 months in the past, assume next year
             if (datetime.now() - date).days > 180:
                 date = datetime(current_year + 1, month, day)
+            logger.debug(f"us_short_match giving {date}")
             return date
         except ValueError:
             pass
@@ -294,6 +291,7 @@ def extract_date_from_text(text: str) -> Optional[datetime]:
                 date = datetime(current_year, month, day)
                 if (datetime.now() - date).days > 180:
                     date = datetime(current_year + 1, month, day)
+                logger.debug(f"text_month_match giving {date}")
                 return date
         except ValueError:
             pass
@@ -313,13 +311,15 @@ def extract_date_from_text(text: str) -> Optional[datetime]:
                 date = datetime(current_year, month, day)
                 if (datetime.now() - date).days > 180:
                     date = datetime(current_year + 1, month, day)
+                logger.debug(f"text_month_match_reverse giving {date}")
                 return date
         except ValueError:
             pass
 
     try:
-        date_from_day_of_week = find_closest_day_date(text)
-        return date_from_day_of_week
+        date = find_closest_day_date(text)
+        logger.debug(f"find_closest_day_date giving {date}")
+        return date
     except ValueError:
         pass
 
@@ -389,6 +389,7 @@ def find_closest_day_date(text_string: str) -> Optional[datetime]:
     # If there's a tie, min() picks the first one; 
     # using a custom key ensures we get the closest.
     closest_date = min(candidates, key=lambda d: abs(d - today))
+    logger.debug(f"find_closest_day_date giving {closest_date}")
 
     return closest_date
 

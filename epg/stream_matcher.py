@@ -214,6 +214,7 @@ def match_stream_single_league(
             return result
 
         else:
+            logger.debug("Hitting else part of stream matcher line 217")
             # Teams could not be matched to ESPN by ID
             # Try name-based scoreboard search as fallback (for small colleges)
             raw_away = team_result.get('raw_away')

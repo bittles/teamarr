@@ -316,12 +316,14 @@ def extract_date_from_text(text: str) -> Optional[datetime]:
         except ValueError:
             pass
 
-    try:
-        date = find_closest_day_date(text)
-        logger.debug(f"find_closest_day_date giving {date} from {text}")
-        return date
-    except ValueError:
-        pass
+    nfl_stream = re.search(r'nfl', text.Lower())
+    if nfl_stream:
+        try:
+            date = find_closest_day_date(text)
+            logger.debug(f"find_closest_day_date giving {date} from {text}")
+            return date
+        except ValueError:
+            pass
 
     return None
 

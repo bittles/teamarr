@@ -315,8 +315,11 @@ def extract_date_from_text(text: str) -> Optional[datetime]:
                 return date
         except ValueError:
             pass
-
-    nfl_stream = re.search(r'nfl', text.Lower())
+#text.Lower()
+    nfl_stream = re.search(
+        r'nfl', 
+        text
+    )
     if nfl_stream:
         try:
             date = find_closest_day_date(text)

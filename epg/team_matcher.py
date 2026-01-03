@@ -315,9 +315,10 @@ def extract_date_from_text(text: str) -> Optional[datetime]:
                 return date
         except ValueError:
             pass
-#text.Lower()
+
+    # Pattern 6: for streams with NFL in the name, assume days of the week if only time is listed.  text.Lower() function does not work here for some reason
     nfl_stream = re.search(
-        r'nfl', 
+        r'NFL', 
         text
     )
     if nfl_stream:

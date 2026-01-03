@@ -360,7 +360,9 @@ def find_closest_day_date(text_string: str) -> Optional[datetime]:
     # Prepare regex
     all_patterns = '|'.join(re.escape(k) for k in day_map.keys())
     day_pattern = re.compile(r'\b(' + all_patterns + r')\b', re.IGNORECASE)
-    time_pattern = re.compile(r'8:15')
+    time_pattern_tnf = re.compile(r'8:15')
+    time_pattern_sat_afternoon = re.compile(r'4:30')
+    time_pattern_sat_pm = re.compile(r'8PM')
 
     # 2. Extract the Day or Apply Default Logic
     match = day_pattern.search(text_string)
@@ -370,9 +372,15 @@ def find_closest_day_date(text_string: str) -> Optional[datetime]:
         target_day_index = day_map[matched_key]
     else:
         # No day found, check time for conditional default
-        if time_pattern.search(text_string):
+        if time_pattern_tnf.search(text_string):
             # Rule 1: No day, but time is 8:15 -> Assume Thursday
             target_day_index = 3  # Thursday
+        elif time_pattern_sat_afternoon.search(text_string):
+            # Rule 1: No day, but time is 4:30 -> Assume Saturday
+            target_day_index = 5  # Thursday
+        elif time_pattern_sat_pm.search(text_string):
+            # Rule 1: No day, but time is 8PM -> Assume Saturday
+            target_day_index = 5  # Thursday
         else:
             # Rule 2: No day and not 8:15 -> Default to Sunday
             target_day_index = 6  # Sunday

@@ -322,6 +322,7 @@ def extract_date_from_text(text: str) -> Optional[datetime]:
         text
     )
     if nfl_stream:
+        logger.debug(f"'{text}' is matched as an NFL stream without a date match")
         try:
             date = find_closest_day_date(text)
             logger.debug(f"find_closest_day_date giving {date} from {text}")

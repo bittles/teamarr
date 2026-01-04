@@ -2144,6 +2144,37 @@
       ]
     },
     {
+      "name": "matchup_short",
+      "description": "Team matchup with short names",
+      "source": "Calculated",
+      "category": "\ud83d\udcc5 Schedule & Broadcast",
+      "icon": "\ud83c\udfae",
+      "type": "string",
+      "availability": "always",
+      "sports": [
+        "basketball",
+        "football",
+        "hockey",
+        "baseball"
+      ],
+      "available_suffixes": [
+        "base"
+      ],
+      "examples_by_sport": {
+        "NBA": "Pacers @ Pistons",
+        "NFL": "Packers @ Lions",
+        "MLB": "Guardians @ Tigers",
+        "NHL": "Devils @ Red Wings",
+        "NCAAM": "Buckeyes @ Wolverines",
+        "NCAAF": "Buckeyes @ Wolverines",
+        "Soccer": "Manchester City @ Liverpool"
+      },
+      "context": [
+        "team",
+        "event"
+      ]
+    },
+    {
       "name": "matchup_abbrev",
       "description": "Team matchup with abbreviations",
       "source": "Calculated",

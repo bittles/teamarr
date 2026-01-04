@@ -112,6 +112,7 @@ class EPGOrchestrator:
             team_data = {
                 'id': competitor.get('id', ''),
                 'name': competitor.get('team', {}).get('displayName', ''),
+                'name_short': competitor.get('team', {}).get('shortDisplayName', ''),
                 'abbrev': competitor.get('team', {}).get('abbreviation', ''),
                 'score': score,
                 'record': competitor.get('record', [{}])[0] if competitor.get('record') else {}

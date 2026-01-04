@@ -133,6 +133,7 @@ class TemplateEngine:
 
         # Use team_config as fallback when game data is not available
         variables['team_name'] = our_team.get('name', '') or team_config.get('team_name', '')
+        variables['team_name_short'] = our_team.get('name_short', '') or team_config.get('team_name_short', '')
         variables['team_abbrev'] = our_team.get('abbrev', '') or team_config.get('team_abbrev', '')
         variables['team_abbrev_lower'] = variables['team_abbrev'].lower()
 
@@ -140,10 +141,12 @@ class TemplateEngine:
         variables['team_name_pascal'] = to_pascal_case(variables['team_name'])
 
         variables['opponent'] = opponent.get('name', '')
+        variables['opponent_short'] = opponent.get('name_short', '')
         variables['opponent_abbrev'] = opponent.get('abbrev', '')
         variables['opponent_abbrev_lower'] = variables['opponent_abbrev'].lower()
         variables['matchup_abbrev'] = f"{away_team.get('abbrev', '')} @ {home_team.get('abbrev', '')}"
         variables['matchup'] = f"{away_team.get('name', '')} @ {home_team.get('name', '')}"
+        variables['matchup_short'] = f"{away_team.get('name_short', '')} @ {home_team.get('name_short', '')}"
 
         # Rankings (primarily for college sports - NFL/NBA don't have rankings)
         # Rank comes from team_stats/opponent_stats (fetched from team info API)
@@ -355,7 +358,9 @@ class TemplateEngine:
         variables['vs_at'] = 'vs' if is_home else 'at'
         variables['vs_@'] = 'vs' if is_home else '@'
         variables['home_team'] = home_team.get('name', '')
+        variables['home_team_short'] = home_team.get('name_short', '')
         variables['away_team'] = away_team.get('name', '')
+        variables['away_team_short'] = away_team.get('name_short', '')
         variables['home_team_pascal'] = to_pascal_case(variables['home_team'])
         variables['away_team_pascal'] = to_pascal_case(variables['away_team'])
         variables['home_team_abbrev'] = home_team.get('abbrev', '')
@@ -809,7 +814,7 @@ class TemplateEngine:
             'last_5_record', 'league', 'league_id', 'league_name', 'gracenote_category', 'opponent_is_ranked', 'playoff_seed',
             'pro_conference', 'pro_conference_abbrev', 'pro_division',
             'soccer_primary_league', 'soccer_primary_league_id', 'sport',
-            'streak', 'team_abbrev', 'team_losses', 'team_name', 'team_name_pascal', 'team_papg', 'team_ppg',
+            'streak', 'team_abbrev', 'team_losses', 'team_name', 'team_name_short', 'team_name_pascal', 'team_papg', 'team_ppg',
             'team_rank', 'team_record', 'team_ties', 'team_win_pct', 'team_wins'
         }
 

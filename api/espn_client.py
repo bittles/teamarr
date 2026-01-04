@@ -698,8 +698,11 @@ class ESPNClient:
                 home = next((c for c in competitors if c.get('homeAway') == 'home'), competitors[0])
                 away = next((c for c in competitors if c.get('homeAway') == 'away'), competitors[1])
                 home_name = home.get('team', {}).get('displayName', '')
+                home_name_short = home.get('team', {}).get('shortDisplayName', '')
                 away_name = away.get('team', {}).get('displayName', '')
+                away_name_short = away.get('team', {}).get('shortDisplayName', '')
                 event['name'] = f"{away_name} at {home_name}"
+                event['name_short'] = f"{away_name_short} at {home_name_short}"
                 event['shortName'] = f"{away.get('team', {}).get('abbreviation', '')} @ {home.get('team', {}).get('abbreviation', '')}"
 
             return event
@@ -786,6 +789,7 @@ class ESPNClient:
                 'home_team': {
                     'id': home_team['team']['id'],
                     'name': home_team['team']['displayName'],
+                    'name_short': home_team['team']['shortDisplayName'],
                     'abbrev': home_team['team']['abbreviation'],
                     'logo': home_team['team'].get('logo'),
                     'color': home_team['team'].get('color'),
@@ -795,6 +799,7 @@ class ESPNClient:
                 'away_team': {
                     'id': away_team['team']['id'],
                     'name': away_team['team']['displayName'],
+                    'name_short': away_team['team']['shortDisplayName'],
                     'abbrev': away_team['team']['abbreviation'],
                     'logo': away_team['team'].get('logo'),
                     'color': away_team['team'].get('color'),
@@ -977,6 +982,7 @@ class ESPNClient:
 
         return {
             'team_name': team.get('displayName') or team.get('name', ''),
+            'team_name_short': team.get('shortDisplayName') or team.get('name_short', ''),
             'team_abbrev': team.get('abbreviation', ''),
             'team_slug': team.get('slug', team_slug),
             'league': league,

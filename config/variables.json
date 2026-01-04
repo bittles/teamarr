@@ -38,6 +38,7 @@
         "total_instances": 32,
         "examples": [
           "team_name",
+          "team_name_short",
           "team_record",
           "league",
           "head_coach",
@@ -326,6 +327,36 @@
         "NHL": "Detroit Red Wings",
         "NCAAM": "Michigan Wolverines",
         "NCAAF": "Michigan Wolverines",
+        "Soccer": "Liverpool"
+      },
+      "context": [
+        "team"
+      ]
+    },
+    {
+      "name": "team_name_short",
+      "description": "Short team name",
+      "source": "`/teams/{id}` \u2192 `team.shortDisplayName`",
+      "category": "\ud83c\udff7\ufe0f Team Identity",
+      "icon": "\ud83c\udfc0",
+      "type": "string",
+      "availability": "always",
+      "sports": [
+        "basketball",
+        "football",
+        "hockey",
+        "baseball"
+      ],
+      "available_suffixes": [
+        "base"
+      ],
+      "examples_by_sport": {
+        "NBA": "Pistons",
+        "NFL": "Lions",
+        "MLB": "Tigers",
+        "NHL": "Red Wings",
+        "NCAAM": "Wolverines",
+        "NCAAF": "Wolverines",
         "Soccer": "Liverpool"
       },
       "context": [
@@ -1431,6 +1462,38 @@
         "NHL": "New Jersey Devils",
         "NCAAM": "Ohio State Buckeyes",
         "NCAAF": "Ohio State Buckeyes",
+        "Soccer": "Manchester City"
+      },
+      "context": [
+        "team"
+      ]
+    },
+    {
+      "name": "opponent_short",
+      "description": "Opponent short name",
+      "source": "`/schedule` \u2192 event competitors",
+      "category": "\ud83d\udc64 Opponent",
+      "icon": "\ud83c\udfc0",
+      "type": "string",
+      "availability": "always",
+      "sports": [
+        "basketball",
+        "football",
+        "hockey",
+        "baseball"
+      ],
+      "available_suffixes": [
+        "base",
+        "next",
+        "last"
+      ],
+      "examples_by_sport": {
+        "NBA": "Pacers",
+        "NFL": "Packers",
+        "MLB": "Guardians",
+        "NHL": "Devils",
+        "NCAAM": "Buckeyes",
+        "NCAAF": "Buckeyes",
         "Soccer": "Manchester City"
       },
       "context": [
@@ -3878,6 +3941,39 @@
       ]
     },
     {
+      "name": "home_team_short",
+      "description": "Home team short name",
+      "source": "`/schedule` \u2192 competitors",
+      "category": "\ud83c\udfe0 Teams (Home/Away)",
+      "icon": "\ud83c\udfc0",
+      "type": "string",
+      "availability": "always",
+      "sports": [
+        "basketball",
+        "football",
+        "hockey",
+        "baseball"
+      ],
+      "available_suffixes": [
+        "base",
+        "next",
+        "last"
+      ],
+      "examples_by_sport": {
+        "NBA": "Pistons",
+        "NFL": "Lions",
+        "MLB": "Tigers",
+        "NHL": "Red Wings",
+        "NCAAM": "Wolverines",
+        "NCAAF": "Wolverines",
+        "Soccer": "Liverpool"
+      },
+      "context": [
+        "team",
+        "event"
+      ]
+    },
+    {
       "name": "away_team",
       "description": "Away team name",
       "source": "`/schedule` \u2192 competitors",
@@ -3903,6 +3999,39 @@
         "NHL": "New Jersey Devils",
         "NCAAM": "Ohio State Buckeyes",
         "NCAAF": "Ohio State Buckeyes",
+        "Soccer": "Manchester City"
+      },
+      "context": [
+        "team",
+        "event"
+      ]
+    },
+    {
+      "name": "away_team_short",
+      "description": "Away team short name",
+      "source": "`/schedule` \u2192 competitors",
+      "category": "\ud83c\udfe0 Teams (Home/Away)",
+      "icon": "\ud83c\udfc0",
+      "type": "string",
+      "availability": "always",
+      "sports": [
+        "basketball",
+        "football",
+        "hockey",
+        "baseball"
+      ],
+      "available_suffixes": [
+        "base",
+        "next",
+        "last"
+      ],
+      "examples_by_sport": {
+        "NBA": "Pacers",
+        "NFL": "Packers",
+        "MLB": "Guardians",
+        "NHL": "Devils",
+        "NCAAM": "Buckeyes",
+        "NCAAF": "Buckeyes",
         "Soccer": "Manchester City"
       },
       "context": [

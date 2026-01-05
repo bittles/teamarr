@@ -5213,7 +5213,7 @@
     },
     {
       "name": "winner",
-      "description": "Winning team full name",
+      "description": "Winning team short name",
       "source": "Calculated",
       "category": "\ud83c\udfc6 Scores & Results",
       "icon": "\ud83e\udd47",
@@ -5232,6 +5232,29 @@
       "examples_by_sport": {
         "NFL": "Giants",
         "NBA": "Lakers"
+      }
+    },
+    {
+      "name": "winner_full",
+      "description": "Winning team full name",
+      "source": "Calculated",
+      "category": "\ud83c\udfc6 Scores & Results",
+      "icon": "\ud83e\udd47",
+      "type": "string",
+      "availability": "final_only",
+      "context": [
+        "event"
+      ],
+      "sports": [
+        "basketball",
+        "football",
+        "hockey",
+        "baseball"
+      ],
+      "available_suffixes": [],
+      "examples_by_sport": {
+        "NFL": "New York Giants",
+        "NBA": "Los Angeles Lakers"
       }
     },
     {
@@ -5258,6 +5281,29 @@
       }
     },
     {
+      "name": "winner_score",
+      "description": "Winning team score",
+      "source": "Calculated",
+      "category": "\ud83c\udfc6 Scores & Results",
+      "icon": "\ud83e\udd47",
+      "type": "string",
+      "availability": "final_only",
+      "context": [
+        "event"
+      ],
+      "sports": [
+        "basketball",
+        "football",
+        "hockey",
+        "baseball"
+      ],
+      "available_suffixes": [],
+      "examples_by_sport": {
+        "NFL": "24",
+        "NBA": "112"
+      }
+    },
+    {
       "name": "loser",
       "description": "Losing team full name",
       "source": "Calculated",
@@ -5281,6 +5327,29 @@
       }
     },
     {
+      "name": "loser_full",
+      "description": "Losing team full name",
+      "source": "Calculated",
+      "category": "\ud83c\udfc6 Scores & Results",
+      "icon": "\ud83e\udd47",
+      "type": "string",
+      "availability": "final_only",
+      "context": [
+        "event"
+      ],
+      "sports": [
+        "basketball",
+        "football",
+        "hockey",
+        "baseball"
+      ],
+      "available_suffixes": [],
+      "examples_by_sport": {
+        "NFL": "New England Patriots",
+        "NBA": "Boston Celtics"
+      }
+    },
+    {
       "name": "loser_abbrev",
       "description": "Losing team abbreviation",
       "source": "Calculated",
@@ -5299,8 +5368,31 @@
       ],
       "available_suffixes": [],
       "examples_by_sport": {
-        "NFL": "NE",
+        "NFL": "NYG",
         "NBA": "BOS"
+      }
+    },
+    {
+      "name": "loser_score",
+      "description": "Losing team score",
+      "source": "Calculated",
+      "category": "\ud83c\udfc6 Scores & Results",
+      "icon": "\ud83e\udd47",
+      "type": "string",
+      "availability": "final_only",
+      "context": [
+        "event"
+      ],
+      "sports": [
+        "basketball",
+        "football",
+        "hockey",
+        "baseball"
+      ],
+      "available_suffixes": [],
+      "examples_by_sport": {
+        "NFL": "17",
+        "NBA": "115"
       }
     },
     {

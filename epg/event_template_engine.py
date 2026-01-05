@@ -379,13 +379,21 @@ class EventTemplateEngine:
             if home_score > away_score:
                 variables['winner'] = home_team.get('name', '')
                 variables['winner_abbrev'] = home_team.get('abbrev', '')
+                variables['winner_full'] = variables['home_team']
+                variables['winner_score'] = home_score
                 variables['loser'] = away_team.get('name', '')
                 variables['loser_abbrev'] = away_team.get('abbrev', '')
+                variables['loser_full'] = variables['away_team']
+                variables['loser_score'] = away_score
             elif away_score > home_score:
                 variables['winner'] = away_team.get('name', '')
                 variables['winner_abbrev'] = away_team.get('abbrev', '')
+                variables['winner_full'] = variables['away_team']
+                variables['winner_score'] = away_score
                 variables['loser'] = home_team.get('name', '')
                 variables['loser_abbrev'] = home_team.get('abbrev', '')
+                variables['loser_full'] = variables['home_team']
+                variables['loser_score'] = home_score
             else:
                 # Tie
                 variables['winner'] = 'Tie'

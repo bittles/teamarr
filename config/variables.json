@@ -4967,6 +4967,29 @@
       }
     },
     {
+      "name": "winner_score",
+      "description": "Winning team score",
+      "source": "Calculated",
+      "category": "\ud83c\udfc6 Scores & Results",
+      "icon": "\ud83e\udd47",
+      "type": "string",
+      "availability": "final_only",
+      "context": [
+        "event"
+      ],
+      "sports": [
+        "basketball",
+        "football",
+        "hockey",
+        "baseball"
+      ],
+      "available_suffixes": [],
+      "examples_by_sport": {
+        "NFL": "24",
+        "NBA": "115"
+      }
+    },
+    {
       "name": "loser",
       "description": "Losing team full name",
       "source": "Calculated",
@@ -5010,6 +5033,29 @@
       "examples_by_sport": {
         "NFL": "NE",
         "NBA": "BOS"
+      }
+    },
+    {
+      "name": "loser_score",
+      "description": "Losing team score",
+      "source": "Calculated",
+      "category": "\ud83c\udfc6 Scores & Results",
+      "icon": "\ud83e\udd47",
+      "type": "string",
+      "availability": "final_only",
+      "context": [
+        "event"
+      ],
+      "sports": [
+        "basketball",
+        "football",
+        "hockey",
+        "baseball"
+      ],
+      "available_suffixes": [],
+      "examples_by_sport": {
+        "NFL": "17",
+        "NBA": "112"
       }
     },
     {

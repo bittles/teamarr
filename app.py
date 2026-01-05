@@ -1856,7 +1856,7 @@ def _check_team_league_cache_refresh(settings: dict):
     from epg.team_league_cache import TeamLeagueCache
 
     # Uses same frequency setting as soccer cache
-    frequency = settings.get('soccer_cache_refresh_frequency', 'weekly')
+    frequency = settings.get('team_cache_refresh_frequency', 'weekly')
 
     # Map frequency to max age in days
     frequency_days = {
@@ -7685,6 +7685,8 @@ def _extract_template_form_data(form):
 
         'idle_enabled': 1 if form.get('idle_enabled') == 'on' else 0,
         'idle_title': form.get('idle_title'),
+        'idle_title_offseason_enabled': 1 if form.get('idle_title_offseason_enabled') == 'on' else 0,
+        'idle_title_offseason': form.get('idle_title_offseason'),
         'idle_subtitle': form.get('idle_subtitle'),
         'idle_description': form.get('idle_description'),
         'idle_art_url': form.get('idle_art_url'),
@@ -7812,8 +7814,8 @@ if __name__ == '__main__':
     sync_timezone_from_env()
 
     # Initialize caches (runs in background if empty)
-    initialize_soccer_cache()
-    initialize_team_league_cache()
+    #initialize_soccer_cache()
+    #initialize_team_league_cache()
 
     # Start the auto-generation scheduler
     # Only start in main process, not in werkzeug reloader process

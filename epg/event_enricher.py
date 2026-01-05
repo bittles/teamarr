@@ -309,6 +309,7 @@ class EventEnricher:
             team_info = {
                 'id': team_data.get('id', competitor.get('id', '')),
                 'name': team_data.get('displayName') or team_data.get('name', ''),
+                'name_short': team_data.get('shortDisplayName') or team_data.get('name_short', ''),
                 'abbrev': team_data.get('abbreviation', ''),
                 'logo': team_data.get('logo'),
                 'color': team_data.get('color'),
@@ -589,9 +590,24 @@ class EventEnricher:
 
                 # Conference/division info (skip for soccer)
                 if not SoccerCompat.should_skip_division(league):
-                    team['conference'] = team_stats.get('conference_name', '')
-                    team['conference_abbrev'] = team_stats.get('conference_abbrev', '')
-                    team['division'] = team_stats.get('division_name', '')
+                    conf_name = team_stats.get('conference_name', '')
+                    conf_abbrev = team_stats.get('conference_abbrev', '')
+                    div_name = team_stats.get('division_name', '')
+
+                    # Store generic keys for backwards compatibility
+                    team['conference'] = conf_name
+                    team['conference_abbrev'] = conf_abbrev
+                    team['division'] = div_name
+
+                    # Store college/pro specific keys based on league type
+                    is_college = 'college' in league.lower()
+                    if is_college:
+                        team['college_conference'] = conf_name
+                        team['college_conference_abbrev'] = conf_abbrev
+                    else:
+                        team['pro_conference'] = conf_name
+                        team['pro_conference_abbrev'] = conf_abbrev
+                        team['pro_division'] = div_name
 
         # Update enrichment metadata
         event['_enrichment']['has_team_stats'] = True

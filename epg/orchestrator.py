@@ -112,6 +112,7 @@ class EPGOrchestrator:
             team_data = {
                 'id': competitor.get('id', ''),
                 'name': competitor.get('team', {}).get('displayName', ''),
+                'name_short': competitor.get('team', {}).get('shortDisplayName', ''),
                 'abbrev': competitor.get('team', {}).get('abbreviation', ''),
                 'score': score,
                 'record': competitor.get('record', [{}])[0] if competitor.get('record') else {}
@@ -1714,6 +1715,10 @@ class EPGOrchestrator:
         desc_template = team.get(f'{filler_type}_description', '')
 
         if filler_type == 'idle':
+            # Offseason title check (independent toggle)
+            if team.get('idle_title_offseason_enabled') and game_event is None:
+                title_template = team.get('idle_title_offseason', title_template)
+
             # Offseason subtitle check (independent toggle)
             if team.get('idle_subtitle_offseason_enabled') and game_event is None:
                 subtitle_template = team.get('idle_subtitle_offseason', subtitle_template)

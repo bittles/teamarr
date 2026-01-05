@@ -117,7 +117,7 @@ def match_stream_single_league(
             if cached:
                 event_id, cached_league, cached_data = cached
                 # Import here to avoid circular imports
-                from epg.fingerprint_cache import refresh_cached_event
+                from epg.stream_match_cache import refresh_cached_event
                 from database import get_connection
 
                 refreshed = refresh_cached_event(
@@ -214,6 +214,7 @@ def match_stream_single_league(
             return result
 
         else:
+            logger.debug("Hitting else part of stream matcher line 217")
             # Teams could not be matched to ESPN by ID
             # Try name-based scoreboard search as fallback (for small colleges)
             raw_away = team_result.get('raw_away')

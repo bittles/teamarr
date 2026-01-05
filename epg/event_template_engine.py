@@ -119,7 +119,6 @@ class EventTemplateEngine:
 
         variables['event_name'] = event.get('short_name') or event.get('name', '')
         variables['matchup'] = f"{away_team.get('name', '')} @ {home_team.get('name', '')}"
-        variables['matchup_short'] = f"{away_team.get('name_short', '')} @ {home_team.get('name_short', '')}"
         variables['matchup_abbrev'] = f"{away_team.get('abbrev', '')} @ {home_team.get('abbrev', '')}"
 
         # =====================================================================
@@ -127,7 +126,6 @@ class EventTemplateEngine:
         # =====================================================================
 
         variables['home_team'] = home_team.get('name', '')
-        variables['home_team_short'] = home_team.get('name_short', '')
         variables['home_team_abbrev'] = home_team.get('abbrev', '')
         variables['home_team_abbrev_lower'] = variables['home_team_abbrev'].lower()
         variables['home_team_pascal'] = to_pascal_case(variables['home_team'])
@@ -159,7 +157,6 @@ class EventTemplateEngine:
         # =====================================================================
 
         variables['away_team'] = away_team.get('name', '')
-        variables['away_team_short'] = away_team.get('name_short', '')
         variables['away_team_abbrev'] = away_team.get('abbrev', '')
         variables['away_team_abbrev_lower'] = variables['away_team_abbrev'].lower()
         variables['away_team_pascal'] = to_pascal_case(variables['away_team'])

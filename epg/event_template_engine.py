@@ -114,14 +114,6 @@ class EventTemplateEngine:
         status = event.get('status', {}) or {}
 
         # =====================================================================
-        # EVENT IDENTIFICATION
-        # =====================================================================
-
-        variables['event_name'] = event.get('short_name') or event.get('name', '')
-        variables['matchup'] = f"{away_team.get('name', '')} @ {home_team.get('name', '')}"
-        variables['matchup_abbrev'] = f"{away_team.get('abbrev', '')} @ {home_team.get('abbrev', '')}"
-
-        # =====================================================================
         # COMPETITOR IDENTIFICATION FOR SHORT TEAM NAMES
         # =====================================================================
 
@@ -141,6 +133,15 @@ class EventTemplateEngine:
                 home_team_competitor = team_info_competitor
             elif competitor.get('homeAway') == 'away':
                 away_team_competitor = team_info_competitor
+
+        # =====================================================================
+        # EVENT IDENTIFICATION
+        # =====================================================================
+
+        variables['matchup_short'] = f"{away_team_competitor.get('name_short', '')} @ {home_team_competitor.get('name_short', '')}"
+        variables['event_name'] = event.get('short_name') or event.get('name', '')
+        variables['matchup'] = f"{away_team.get('name', '')} @ {home_team.get('name', '')}"
+        variables['matchup_abbrev'] = f"{away_team.get('abbrev', '')} @ {home_team.get('abbrev', '')}"
 
         # =====================================================================
         # HOME TEAM VARIABLES

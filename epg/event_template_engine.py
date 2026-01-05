@@ -114,9 +114,31 @@ class EventTemplateEngine:
         status = event.get('status', {}) or {}
 
         # =====================================================================
+        # COMPETITOR IDENTIFICATION FOR SHORT TEAM NAMES
+        # =====================================================================
+
+        competitions = event.get('competitions', [])
+        comp = competitions[0]
+        competitors = comp.get('competitors', [])
+        home_team_competitor = {}
+        away_team_competitor = {}
+        for competitor in competitors:
+            team_data = competitor.get('team', {})
+
+            team_info_competitor = {
+                'name_short': team_data.get('shortDisplayName') or team_data.get('name', ''),
+            }
+
+            if competitor.get('homeAway') == 'home':
+                home_team_competitor = team_info_competitor
+            elif competitor.get('homeAway') == 'away':
+                away_team_competitor = team_info_competitor
+
+        # =====================================================================
         # EVENT IDENTIFICATION
         # =====================================================================
 
+        variables['matchup_short'] = f"{away_team_competitor.get('name_short', '')} @ {home_team_competitor.get('name_short', '')}"
         variables['event_name'] = event.get('short_name') or event.get('name', '')
         variables['matchup'] = f"{away_team.get('name', '')} @ {home_team.get('name', '')}"
         variables['matchup_abbrev'] = f"{away_team.get('abbrev', '')} @ {home_team.get('abbrev', '')}"
@@ -125,6 +147,7 @@ class EventTemplateEngine:
         # HOME TEAM VARIABLES
         # =====================================================================
 
+        variables['home_team_short'] = home_team_competitor.get('name_short', '')
         variables['home_team'] = home_team.get('name', '')
         variables['home_team_abbrev'] = home_team.get('abbrev', '')
         variables['home_team_abbrev_lower'] = variables['home_team_abbrev'].lower()
@@ -146,7 +169,9 @@ class EventTemplateEngine:
         variables['home_team_pro_division'] = home_team.get('pro_division', '')
 
         # Home team rank/seed/streak (from enrich_with_team_stats)
-        variables['home_team_rank'] = home_team.get('rank', '')
+        # Rank: show #X if ranked top 25, else empty (99 = unranked in ESPN data)
+        home_rank = home_team.get('rank', 99)
+        variables['home_team_rank'] = f"#{home_rank}" if isinstance(home_rank, int) and home_rank <= 25 else ''
         variables['home_team_seed'] = home_team.get('seed', '')
         variables['home_team_streak'] = home_team.get('streak', '')
 
@@ -154,6 +179,7 @@ class EventTemplateEngine:
         # AWAY TEAM VARIABLES
         # =====================================================================
 
+        variables['away_team_short'] = away_team_competitor.get('name_short', '')
         variables['away_team'] = away_team.get('name', '')
         variables['away_team_abbrev'] = away_team.get('abbrev', '')
         variables['away_team_abbrev_lower'] = variables['away_team_abbrev'].lower()
@@ -175,7 +201,9 @@ class EventTemplateEngine:
         variables['away_team_pro_division'] = away_team.get('pro_division', '')
 
         # Away team rank/seed/streak (from enrich_with_team_stats)
-        variables['away_team_rank'] = away_team.get('rank', '')
+        # Rank: show #X if ranked top 25, else empty (99 = unranked in ESPN data)
+        away_rank = away_team.get('rank', 99)
+        variables['away_team_rank'] = f"#{away_rank}" if isinstance(away_rank, int) and away_rank <= 25 else ''
         variables['away_team_seed'] = away_team.get('seed', '')
         variables['away_team_streak'] = away_team.get('streak', '')
 
@@ -195,10 +223,14 @@ class EventTemplateEngine:
             'soccer': 'Soccer'
         }
         variables['sport'] = sport_display_names.get(sport_code, sport_code.capitalize())
+        variables['sport_lower'] = variables['sport'].lower()
 
         # Get league from event first (for multi-sport), then group (for single-sport)
         # event['league'] contains the ESPN slug (e.g., 'aus.1', 'eng.1', 'nfl')
         event_league = event.get('league', '') or group_info.get('assigned_league', '')
+
+        # {league_slug} - Always the raw ESPN slug (e.g., 'womens-college-basketball', 'eng.1')
+        variables['league_slug'] = event_league.lower() if event_league else ''
 
         # {league_id} - Check aliases table for friendly name, fallback to ESPN slug
         # This ensures consistent output whether from single-sport or multi-sport groups
@@ -237,6 +269,15 @@ class EventTemplateEngine:
         # {league_name} is the full display name (e.g., "English Premier League")
         variables['league_name'] = league_display_name
 
+        # Gracenote-compatible category (e.g., "College Basketball", "NFL Football")
+        # Uses curated value from league_config, falls back to "{league_name} {Sport}"
+        from database import get_gracenote_category
+        variables['gracenote_category'] = get_gracenote_category(
+            event_league.lower() if event_league else '',
+            league_display_name,
+            sport_code
+        )
+
         # =====================================================================
         # DATE & TIME
         # =====================================================================
@@ -249,8 +290,7 @@ class EventTemplateEngine:
                 local_datetime = game_datetime.astimezone(ZoneInfo(epg_timezone))
 
                 variables['game_date'] = local_datetime.strftime('%A, %B %d, %Y')
-                # variables['game_date_short'] = local_datetime.strftime('%b %d')
-                variables['game_date_short'] = local_datetime.strftime('%-m/%-d')
+                variables['game_date_short'] = local_datetime.strftime('%b %d')
 
                 # Use user's time format preferences for game_time
                 if time_format_settings:
@@ -269,8 +309,11 @@ class EventTemplateEngine:
 
                 variables['days_until'] = str(max(0, days_until))
 
+                game_date_compare = local_datetime.date()
+                now_date_compare = now.astimezone(ZoneInfo(epg_timezone)).date()
+
                 # Today vs Tonight based on 5pm cutoff in user's timezone
-                if days_until == 0:
+                if game_date_compare == now_date_compare:
                     variables['today_tonight'] = 'tonight' if local_datetime.hour >= 17 else 'today'
                     variables['today_tonight_title'] = 'Tonight' if local_datetime.hour >= 17 else 'Today'
                 else:
@@ -336,13 +379,21 @@ class EventTemplateEngine:
             if home_score > away_score:
                 variables['winner'] = home_team.get('name', '')
                 variables['winner_abbrev'] = home_team.get('abbrev', '')
+                variables['winner_full'] = variables['home_team']
+                variables['winner_score'] = home_score
                 variables['loser'] = away_team.get('name', '')
                 variables['loser_abbrev'] = away_team.get('abbrev', '')
+                variables['loser_full'] = variables['away_team']
+                variables['loser_score'] = away_score
             elif away_score > home_score:
                 variables['winner'] = away_team.get('name', '')
                 variables['winner_abbrev'] = away_team.get('abbrev', '')
+                variables['winner_full'] = variables['away_team']
+                variables['winner_score'] = away_score
                 variables['loser'] = home_team.get('name', '')
                 variables['loser_abbrev'] = home_team.get('abbrev', '')
+                variables['loser_full'] = variables['home_team']
+                variables['loser_score'] = home_score
             else:
                 # Tie
                 variables['winner'] = 'Tie'

@@ -37,7 +37,7 @@ from utils.time_format import format_time as fmt_time, get_time_settings
 from utils.filter_reasons import FilterReason, get_display_text, INTERNAL_REASONS
 from utils.match_result import (
     FilteredReason, FailedReason, MatchedTier,
-    should_record_failure, normalize_reason
+    should_record_failure, normalize_reason, categorize_team_matcher_reason
 )
 from config import VERSION
 
@@ -367,117 +367,62 @@ def refresh_event_group_core(group, m3u_manager, skip_m3u_refresh=False, epg_sta
                 is_multi_sport = False  # Fall back to single-league mode
 
         def match_single_stream_single_league(stream):
-            """Match a single stream to ESPN event in assigned league - called in parallel"""
+            """Match a single stream to ESPN event in assigned league - called in parallel.
+
+            Uses shared stream_matcher module for consistency with test modal.
+            """
+            from epg.stream_matcher import match_stream_single_league, MatchConfig
+
             # Create matchers per-thread for thread safety
             thread_team_matcher = create_matcher()
             thread_event_matcher = create_event_matcher(lookahead_days=lookahead_days)
 
-            # Exception keyword was pre-extracted in Step 2.6 and attached to stream dict
-            # Team matcher's _prepare_text_for_parsing() handles stripping for matching
+            # Build config from group settings
+            config = MatchConfig(
+                league=group['assigned_league'],
+                lookahead_days=lookahead_days,
+                include_final_events=include_final_events,
+                custom_regex_teams=group.get('custom_regex_teams'),
+                custom_regex_teams_enabled=teams_enabled,
+                custom_regex_date=group.get('custom_regex_date'),
+                custom_regex_date_enabled=date_enabled,
+                custom_regex_time=group.get('custom_regex_time'),
+                custom_regex_time_enabled=time_enabled
+            )
 
-            try:
-                # Use selective regex if any individual field is enabled
-                if any_custom_enabled:
-                    team_result = thread_team_matcher.extract_teams_with_selective_regex(
-                        stream['name'],
-                        group['assigned_league'],
-                        teams_pattern=group.get('custom_regex_teams'),
-                        teams_enabled=teams_enabled,
-                        date_pattern=group.get('custom_regex_date'),
-                        date_enabled=date_enabled,
-                        time_pattern=group.get('custom_regex_time'),
-                        time_enabled=time_enabled
-                    )
-                else:
-                    team_result = thread_team_matcher.extract_teams(stream['name'], group['assigned_league'])
+            # Use shared matching function
+            result = match_stream_single_league(
+                stream, config, thread_team_matcher, thread_event_matcher,
+                stream_cache=stream_cache,
+                internal_group_id=group_id,
+                current_generation=generation
+            )
 
-                if team_result.get('matched'):
-                    event_result = thread_event_matcher.find_and_enrich(
-                        team_result['away_team_id'],
-                        team_result['home_team_id'],
-                        group['assigned_league'],
-                        game_date=team_result.get('game_date'),
-                        game_time=team_result.get('game_time'),
-                        include_final_events=include_final_events
-                    )
+            # Convert MatchResult to EPG generation format
+            if result.error:
+                return {'type': 'error', 'stream': stream, 'error': result.error_message}
 
-                    if event_result.get('found'):
-                        return {
-                            'type': 'matched',
-                            'stream': stream,
-                            'teams': team_result,
-                            'event': event_result['event'],
-                            'detected_league': group['assigned_league'],
-                            'detection_tier': 'direct',
-                            'exception_keyword': stream.get('exception_keyword')
-                        }
-                    else:
-                        # No game found with primary team matches - try alternate team combinations
-                        # This handles ambiguous names like "Maryland" matching multiple teams
-                        raw_away = team_result.get('raw_away', '')
-                        raw_home = team_result.get('raw_home', '')
-                        league = group['assigned_league']
+            if result.matched:
+                return {
+                    'type': 'matched',
+                    'stream': stream,
+                    'teams': result.team_result,
+                    'event': result.event,
+                    'detected_league': result.detected_league,
+                    'detection_tier': result.detection_tier,
+                    'exception_keyword': result.exception_keyword
+                }
 
-                        if raw_away and raw_home:
-                            # Get all teams matching each raw name
-                            all_away_teams = thread_team_matcher.get_all_matching_teams(raw_away, league, max_results=5)
-                            all_home_teams = thread_team_matcher.get_all_matching_teams(raw_home, league, max_results=5)
+            if result.filtered:
+                return {'type': 'filtered', 'reason': result.reason, 'stream': stream}
 
-                            # Try all combinations (skip the first one - already tried)
-                            tried_pairs = {(team_result['away_team_id'], team_result['home_team_id'])}
-
-                            for away_candidate in all_away_teams:
-                                for home_candidate in all_home_teams:
-                                    pair = (away_candidate['id'], home_candidate['id'])
-                                    if pair in tried_pairs:
-                                        continue
-                                    tried_pairs.add(pair)
-
-                                    alt_result = thread_event_matcher.find_and_enrich(
-                                        away_candidate['id'],
-                                        home_candidate['id'],
-                                        league,
-                                        game_date=team_result.get('game_date'),
-                                        game_time=team_result.get('game_time'),
-                                        include_final_events=include_final_events
-                                    )
-
-                                    if alt_result.get('found'):
-                                        # Found a match with alternate teams - update team_result
-                                        alt_team_result = team_result.copy()
-                                        alt_team_result['away_team_id'] = away_candidate['id']
-                                        alt_team_result['away_team_name'] = away_candidate['name']
-                                        alt_team_result['away_team_abbrev'] = away_candidate.get('abbrev', '')
-                                        alt_team_result['home_team_id'] = home_candidate['id']
-                                        alt_team_result['home_team_name'] = home_candidate['name']
-                                        alt_team_result['home_team_abbrev'] = home_candidate.get('abbrev', '')
-                                        alt_team_result['disambiguated'] = True  # Flag for debugging
-
-                                        app.logger.debug(
-                                            f"Team disambiguation: '{raw_away}' vs '{raw_home}' → "
-                                            f"'{away_candidate['name']}' vs '{home_candidate['name']}'"
-                                        )
-
-                                        return {
-                                            'type': 'matched',
-                                            'stream': stream,
-                                            'teams': alt_team_result,
-                                            'event': alt_result['event'],
-                                            'detected_league': league,
-                                            'detection_tier': 'direct',
-                                            'exception_keyword': stream.get('exception_keyword')
-                                        }
-
-                        # No match found with any combination
-                        reason = event_result.get('reason', '')
-                        normalized = INTERNAL_REASONS.get(reason, reason)
-                        return {'type': 'filtered', 'reason': normalized, 'stream': stream}
-                else:
-                    return {'type': 'no_teams', 'stream': stream}
-
-            except Exception as e:
-                app.logger.warning(f"Error matching stream '{stream['name']}': {e}")
-                return {'type': 'error', 'stream': stream, 'error': str(e)}
+            # No teams matched
+            return {
+                'type': 'no_teams',
+                'stream': stream,
+                'reason': result.reason,
+                'parsed_teams': result.parsed_teams
+            }
 
         def match_single_stream_multi_sport(stream):
             """Match a single stream using multi-sport league detection - called in parallel.
@@ -853,7 +798,9 @@ def refresh_event_group_core(group, m3u_manager, skip_m3u_refresh=False, epg_sta
                 if generation is not None:
                     stream = result.get('stream', {})
                     parsed_teams = result.get('parsed_teams', {})
-                    reason = result.get('reason', FailedReason.TEAMS_NOT_PARSED)
+                    raw_reason = result.get('reason')
+                    # Categorize verbose team_matcher reasons to standard codes
+                    reason = categorize_team_matcher_reason(raw_reason) if raw_reason else FailedReason.TEAMS_NOT_PARSED.value
                     failed_matches.append({
                         'generation_id': generation,
                         'group_id': group_id,
@@ -1070,8 +1017,8 @@ def refresh_event_group_core(group, m3u_manager, skip_m3u_refresh=False, epg_sta
                         'streams_added': child_results.get('streams_added', [])
                     }
 
-            elif group.get('channel_start'):
-                # Parent group: Normal channel creation
+            elif group.get('channel_start') or group.get('channel_assignment_mode') == 'auto':
+                # Parent group: Normal channel creation (MANUAL with channel_start, or AUTO mode)
                 from epg.channel_lifecycle import get_lifecycle_manager
 
                 lifecycle_mgr = get_lifecycle_manager()
@@ -1085,6 +1032,15 @@ def refresh_event_group_core(group, m3u_manager, skip_m3u_refresh=False, epg_sta
                         app.logger.debug(f"Cleared delete times for {len(sync_results['cleared'])} channels (settings changed)")
                     if sync_results.get('updated'):
                         app.logger.debug(f"Synced {len(sync_results['updated'])} channels with group settings")
+
+                    # Reassign ALL channels to correct range if needed
+                    # AUTO: handles sort order changes or upstream stream count changes
+                    # MANUAL: handles user changing channel_start to a new value
+                    reassign_results = lifecycle_mgr.reassign_group_channels(group)
+                    if reassign_results.get('reassigned'):
+                        app.logger.info(f"Reassigned {len(reassign_results['reassigned'])} channels to correct range")
+                    if reassign_results.get('errors'):
+                        app.logger.warning(f"Errors reassigning {len(reassign_results['errors'])} channels")
 
                     # Update scheduled delete times for matched streams (with fresh event data)
                     update_results = lifecycle_mgr.update_existing_channels(
@@ -1130,7 +1086,7 @@ def refresh_event_group_core(group, m3u_manager, skip_m3u_refresh=False, epg_sta
 
         # Cleanup removed streams even if no matched streams
         # (don't process scheduled deletions here - that happens globally at end of EPG generation)
-        if not matched_streams and group.get('channel_start'):
+        if not matched_streams and (group.get('channel_start') or group.get('channel_assignment_mode') == 'auto'):
             from epg.channel_lifecycle import get_lifecycle_manager
             lifecycle_mgr = get_lifecycle_manager()
             if lifecycle_mgr:
@@ -1335,6 +1291,13 @@ def generate_all_epg(progress_callback=None, settings=None, save_history=True, t
         # PHASE 2: Event-based EPG
         # ============================================
         report_progress('progress', 'Processing event groups...', 50)
+
+        # Clear any stale channel_start values from AUTO groups
+        # (AUTO mode calculates channel_start dynamically)
+        from database import clear_auto_group_channel_starts
+        cleared_count = clear_auto_group_channel_starts()
+        if cleared_count > 0:
+            app.logger.debug(f"Cleared channel_start for {cleared_count} AUTO group(s)")
 
         event_groups = get_all_event_epg_groups(enabled_only=True)
         # Parent groups need templates, child groups inherit from parent (template can be NULL)
@@ -1893,7 +1856,7 @@ def _check_team_league_cache_refresh(settings: dict):
     from epg.team_league_cache import TeamLeagueCache
 
     # Uses same frequency setting as soccer cache
-    frequency = settings.get('soccer_cache_refresh_frequency', 'weekly')
+    frequency = settings.get('team_cache_refresh_frequency', 'weekly')
 
     # Map frequency to max age in days
     frequency_days = {
@@ -1913,6 +1876,7 @@ def scheduler_loop():
     """Background thread that runs the scheduler using cron expressions"""
     global scheduler_running, last_run_time
     from datetime import timezone
+    from zoneinfo import ZoneInfo
     from croniter import croniter
 
     app.logger.info("🚀 EPG Auto-Generation Scheduler started")
@@ -1930,17 +1894,25 @@ def scheduler_loop():
             # Get cron expression (default: every hour at minute 0)
             cron_expression = settings.get('cron_expression', '0 * * * *')
 
-            # Use UTC for all comparisons to avoid timezone issues
-            now = datetime.now(timezone.utc)
+            # Use user's configured timezone for cron evaluation
+            user_tz_name = settings.get('default_timezone', 'UTC')
+            try:
+                user_tz = ZoneInfo(user_tz_name)
+            except Exception:
+                user_tz = ZoneInfo('UTC')
+
+            now = datetime.now(user_tz)
 
             # Get last run time from database (persists across restarts)
             db_last_run = get_last_epg_generation_time()
 
             # Use database time if available, otherwise use in-memory time
             effective_last_run = db_last_run or last_run_time
-            # Ensure in-memory time is also UTC-aware
-            if effective_last_run and effective_last_run.tzinfo is None:
-                effective_last_run = effective_last_run.replace(tzinfo=timezone.utc)
+            # Convert to user timezone for comparison
+            if effective_last_run:
+                if effective_last_run.tzinfo is None:
+                    effective_last_run = effective_last_run.replace(tzinfo=timezone.utc)
+                effective_last_run = effective_last_run.astimezone(user_tz)
 
             # Check if it's time to run based on cron expression
             should_run = False
@@ -1953,12 +1925,12 @@ def scheduler_loop():
                 cron = croniter(cron_expression, base_time)
                 next_run = cron.get_next(datetime)
 
-                # Make next_run timezone-aware if it isn't
+                # Make next_run timezone-aware in user timezone if it isn't
                 if next_run.tzinfo is None:
-                    next_run = next_run.replace(tzinfo=timezone.utc)
+                    next_run = next_run.replace(tzinfo=user_tz)
 
                 if now >= next_run:
-                    app.logger.info(f"⏰ Cron trigger: '{cron_expression}' - scheduled time {next_run.strftime('%H:%M')} reached")
+                    app.logger.info(f"⏰ Cron trigger: '{cron_expression}' - scheduled time {next_run.strftime('%H:%M %Z')} reached")
                     should_run = True
 
             except Exception as e:
@@ -1971,7 +1943,7 @@ def scheduler_loop():
                 run_scheduled_generation()
                 last_run_time = now
 
-            # Check cache refresh once per day at midnight UTC
+            # Check cache refresh once per day at midnight in user timezone
             # This is separate from EPG generation frequency
             if now.hour == 0 and now.minute < 1:  # First minute of the day
                 try:
@@ -2685,7 +2657,7 @@ def teams_toggle_status(team_id):
 def epg_management():
     """EPG management page"""
     import os
-    from database import get_epg_stats_summary
+    from database import get_epg_stats_summary, get_failed_matches_summary
 
     # Get latest EPG generation info
     conn = get_connection()
@@ -2701,6 +2673,10 @@ def epg_management():
 
     # Get EPG stats from single source of truth
     epg_stats = get_epg_stats_summary()
+
+    # Get actual failed count from database (more accurate than calculating)
+    failed_summary = get_failed_matches_summary()
+    actual_failed_count = failed_summary.get('total_count', 0)
 
     # Check if EPG file exists
     epg_path = settings.get('epg_output_path', '/app/data/teamarr.xml')
@@ -2758,7 +2734,8 @@ def epg_management():
                          epg_total_lines=epg_total_lines,
                          epg_analysis=epg_analysis,
                          epg_stats=epg_stats,
-                         epg_url=epg_url)
+                         epg_url=epg_url,
+                         actual_failed_count=actual_failed_count)
 
 # =============================================================================
 # CHANNELS UI
@@ -2947,7 +2924,8 @@ def settings_update():
             'dispatcharr_password', 'dispatcharr_epg_id',
             'channel_create_timing', 'channel_delete_timing', 'include_final_events',
             'event_lookahead_days', 'default_duplicate_event_handling',
-            'soccer_cache_refresh_frequency'
+            'soccer_cache_refresh_frequency',
+            'channel_range_start', 'channel_range_end'
         ]
 
         for field in fields:
@@ -2992,6 +2970,21 @@ def settings_update():
                     if field == 'epg_days_ahead' and value and (value < 1 or value > 14):
                         flash('Days to Generate must be between 1 and 14', 'error')
                         return redirect(url_for('settings_form'))
+                # Handle channel range fields with validation
+                elif field == 'channel_range_start':
+                    value = int(value) if value else 101
+                    if value < 1 or value > 9999:
+                        flash('Channel Range Start must be between 1 and 9999', 'error')
+                        return redirect(url_for('settings_form'))
+                elif field == 'channel_range_end':
+                    # Optional - empty means no limit (NULL in DB)
+                    if value and value.strip():
+                        value = int(value)
+                        if value < 1 or value > 9999:
+                            flash('Channel Range End must be between 1 and 9999', 'error')
+                            return redirect(url_for('settings_form'))
+                    else:
+                        value = None  # No limit
                 elif field in ['game_duration_default', 'max_program_hours_default',
                                'game_duration_basketball', 'game_duration_football',
                                'game_duration_hockey', 'game_duration_baseball', 'game_duration_soccer']:
@@ -3527,6 +3520,10 @@ def api_epg_stats_live():
             except Exception:
                 return None
 
+        # Track seen programmes to avoid counting duplicates
+        # (same event from different groups would have same channel+start+stop)
+        seen_programmes = set()
+
         # Process each programme element
         for programme in root.findall('.//programme'):
             # Look for teamarr metadata comment
@@ -3547,8 +3544,15 @@ def api_epg_stats_live():
 
             start_str = programme.get('start')
             stop_str = programme.get('stop')
+            channel_id = programme.get('channel', '')
             title_elem = programme.find('title')
             title = title_elem.text if title_elem is not None else ''
+
+            # Skip duplicate programmes (same channel+start+stop)
+            prog_key = (channel_id, start_str, stop_str)
+            if prog_key in seen_programmes:
+                continue
+            seen_programmes.add(prog_key)
 
             start_time = parse_xmltv_time(start_str)
             stop_time = parse_xmltv_time(stop_str)
@@ -3565,7 +3569,7 @@ def api_epg_stats_live():
                     'title': title,
                     'start': format_time(start_time, time_fmt, show_tz),
                     'start_ts': start_time.timestamp(),  # For sorting
-                    'channel': programme.get('channel', '')
+                    'channel': channel_id
                 })
 
                 # Live Now: currently in progress
@@ -4791,164 +4795,85 @@ def api_event_epg_dispatcharr_streams_sse(group_id):
                     send_progress('progress', f'Matching {len(streams)} streams...', percent=50)
 
                     def match_single_stream_single(stream):
-                        """Match a single stream to single league - called in parallel"""
+                        """Match a single stream to single league - called in parallel.
+
+                        Uses shared stream_matcher module for consistency with EPG generation.
+                        """
+                        from epg.stream_matcher import match_stream_single_league, MatchConfig
+
+                        stream_name = stream['name']
+
+                        # Pre-filter streams (before calling shared matcher)
+                        if not skip_builtin_filter and not has_game_indicator(stream_name):
+                            return {
+                                'stream': stream,
+                                'filtered': True,
+                                'filter_reason': get_display_text(FilterReason.NO_GAME_INDICATOR)
+                            }
+                        if include_regex and not include_regex.search(stream_name):
+                            return {
+                                'stream': stream,
+                                'filtered': True,
+                                'filter_reason': get_display_text(FilterReason.INCLUDE_REGEX_NOT_MATCHED)
+                            }
+                        if exclude_regex and exclude_regex.search(stream_name):
+                            return {
+                                'stream': stream,
+                                'filtered': True,
+                                'filter_reason': get_display_text(FilterReason.EXCLUDE_REGEX_MATCHED)
+                            }
+
                         # Create matchers per-thread for thread safety
                         thread_team_matcher = create_matcher()
                         thread_event_matcher = create_event_matcher(lookahead_days=lookahead_days)
 
-                        try:
-                            stream_name = stream['name']
-                            stream_id = stream.get('id', 0)
+                        # Build config from group settings
+                        config = MatchConfig(
+                            league=league,
+                            lookahead_days=lookahead_days,
+                            include_final_events=include_final_events,
+                            custom_regex_teams=db_group.get('custom_regex_teams') if db_group else None,
+                            custom_regex_teams_enabled=teams_enabled,
+                            custom_regex_date=db_group.get('custom_regex_date') if db_group else None,
+                            custom_regex_date_enabled=date_enabled,
+                            custom_regex_time=db_group.get('custom_regex_time') if db_group else None,
+                            custom_regex_time_enabled=time_enabled
+                        )
 
-                            # Check if stream is filtered/excluded
-                            if not skip_builtin_filter and not has_game_indicator(stream_name):
-                                return {
-                                    'stream': stream,
-                                    'filtered': True,
-                                    'filter_reason': get_display_text(FilterReason.NO_GAME_INDICATOR)
-                                }
-                            if include_regex and not include_regex.search(stream_name):
-                                return {
-                                    'stream': stream,
-                                    'filtered': True,
-                                    'filter_reason': get_display_text(FilterReason.INCLUDE_REGEX_NOT_MATCHED)
-                                }
-                            if exclude_regex and exclude_regex.search(stream_name):
-                                return {
-                                    'stream': stream,
-                                    'filtered': True,
-                                    'filter_reason': get_display_text(FilterReason.EXCLUDE_REGEX_MATCHED)
-                                }
+                        # Use shared matching function
+                        result = match_stream_single_league(
+                            stream, config, thread_team_matcher, thread_event_matcher,
+                            stream_cache=stream_cache,
+                            internal_group_id=internal_group_id,
+                            current_generation=current_generation
+                        )
 
-                            # Check fingerprint cache first
-                            cached = stream_cache.get(internal_group_id, stream_id, stream_name)
-                            if cached:
-                                event_id, cached_league, cached_data = cached
-                                # Refresh dynamic fields from ESPN
-                                refreshed = refresh_cached_event(
-                                    thread_event_matcher.espn,
-                                    cached_data,
-                                    cached_league,
-                                    get_connection
-                                )
-                                if refreshed:
-                                    # Touch cache to update last_seen_generation
-                                    stream_cache.touch(internal_group_id, stream_id, stream_name, current_generation)
-                                    return {
-                                        'stream': stream,
-                                        'team_result': refreshed.get('team_result', {}),
-                                        'event_result': {
-                                            'found': True,
-                                            'event': refreshed.get('event'),
-                                            'event_id': event_id
-                                        },
-                                        'detected_league': cached_league,
-                                        'detection_tier': 'cache',
-                                        'from_cache': True
-                                    }
+                        # Convert MatchResult to test modal format
+                        if result.error:
+                            return {'stream': stream, 'error': result.error_message}
 
-                            # Extract teams - use custom regex if configured (same logic as refresh_event_group_core)
-                            if any_custom_enabled:
-                                team_result = thread_team_matcher.extract_teams_with_selective_regex(
-                                    stream_name,
-                                    league,
-                                    teams_pattern=db_group.get('custom_regex_teams'),
-                                    teams_enabled=teams_enabled,
-                                    date_pattern=db_group.get('custom_regex_date'),
-                                    date_enabled=date_enabled,
-                                    time_pattern=db_group.get('custom_regex_time'),
-                                    time_enabled=time_enabled
-                                )
-                            else:
-                                team_result = thread_team_matcher.extract_teams(stream_name, league)
-
-                            # If teams matched, find ESPN event
-                            if team_result.get('matched'):
-                                event_result = thread_event_matcher.find_event(
-                                    team_result['away_team_id'],
-                                    team_result['home_team_id'],
-                                    league,
-                                    game_date=team_result.get('game_date'),
-                                    game_time=team_result.get('game_time'),
-                                    include_final_events=include_final_events
-                                )
-
-                                # If no game found, try alternate team combinations (disambiguation)
-                                if not event_result.get('found'):
-                                    raw_away = team_result.get('raw_away', '')
-                                    raw_home = team_result.get('raw_home', '')
-
-                                    if raw_away and raw_home:
-                                        all_away_teams = thread_team_matcher.get_all_matching_teams(raw_away, league, max_results=5)
-                                        all_home_teams = thread_team_matcher.get_all_matching_teams(raw_home, league, max_results=5)
-
-                                        tried_pairs = {(team_result['away_team_id'], team_result['home_team_id'])}
-
-                                        for away_candidate in all_away_teams:
-                                            for home_candidate in all_home_teams:
-                                                pair = (away_candidate['id'], home_candidate['id'])
-                                                if pair in tried_pairs:
-                                                    continue
-                                                tried_pairs.add(pair)
-
-                                                alt_result = thread_event_matcher.find_event(
-                                                    away_candidate['id'],
-                                                    home_candidate['id'],
-                                                    league,
-                                                    game_date=team_result.get('game_date'),
-                                                    game_time=team_result.get('game_time'),
-                                                    include_final_events=include_final_events
-                                                )
-
-                                                if alt_result.get('found'):
-                                                    # Update team_result with alternate teams
-                                                    team_result['away_team_id'] = away_candidate['id']
-                                                    team_result['away_team_name'] = away_candidate['name']
-                                                    team_result['away_team_abbrev'] = away_candidate.get('abbrev', '')
-                                                    team_result['home_team_id'] = home_candidate['id']
-                                                    team_result['home_team_name'] = home_candidate['name']
-                                                    team_result['home_team_abbrev'] = home_candidate.get('abbrev', '')
-                                                    team_result['disambiguated'] = True
-                                                    event_result = alt_result
-                                                    break
-                                            if event_result.get('found'):
-                                                break
-
-                                # Cache successful match for future EPG runs
-                                if event_result.get('found') and event_result.get('event'):
-                                    event = event_result['event']
-                                    event_id = event.get('id')
-                                    if event_id:
-                                        cached_data = {
-                                            'event': event,
-                                            'team_result': team_result
-                                        }
-                                        stream_cache.set(
-                                            internal_group_id, stream_id, stream_name,
-                                            event_id, league, cached_data, current_generation
-                                        )
-
-                                return {
-                                    'stream': stream,
-                                    'team_result': team_result,
-                                    'event_result': event_result,
-                                    'detected_league': league,
-                                    'detection_tier': 'direct'
-                                }
-                            else:
-                                return {
-                                    'stream': stream,
-                                    'team_result': team_result,
-                                    'event_result': None,
-                                    'detected_league': league,
-                                    'detection_tier': 'direct'
-                                }
-
-                        except Exception as e:
+                        if result.matched:
                             return {
                                 'stream': stream,
-                                'error': str(e)
+                                'team_result': result.team_result,
+                                'event_result': {
+                                    'found': True,
+                                    'event': result.event,
+                                    'event_id': result.event.get('id') if result.event else None
+                                },
+                                'detected_league': result.detected_league,
+                                'detection_tier': result.detection_tier,
+                                'from_cache': result.from_cache
                             }
+
+                        # Not matched - return team_result with failure info
+                        return {
+                            'stream': stream,
+                            'team_result': result.team_result or {'matched': False, 'reason': result.reason},
+                            'event_result': {'found': False, 'reason': result.reason} if result.filtered else None,
+                            'detected_league': league,
+                            'detection_tier': 'direct'
+                        }
 
                     def match_single_stream_multi(stream):
                         """Match a single stream using multi-sport league detection - called in parallel.
@@ -5620,7 +5545,8 @@ def api_event_epg_groups_create():
             is_multi_sport=bool(data.get('is_multi_sport')),
             enabled_leagues=data.get('enabled_leagues'),
             channel_sort_order=data.get('channel_sort_order', 'time'),
-            overlap_handling=data.get('overlap_handling', 'add_stream')
+            overlap_handling=data.get('overlap_handling', 'add_stream'),
+            channel_assignment_mode=data.get('channel_assignment_mode', 'auto')
         )
 
         app.logger.info(f"Created event EPG group: {data['group_name']} (ID: {group_id})")
@@ -5854,6 +5780,48 @@ def api_event_epg_groups_delete(group_id):
 
     except Exception as e:
         app.logger.error(f"Error deleting event EPG group {group_id}: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/event-epg/groups/reorder', methods=['POST'])
+def api_event_epg_groups_reorder():
+    """
+    Update sort_order for multiple event EPG groups.
+
+    Body:
+        groups: list of {group_id: int, sort_order: int}
+    """
+    try:
+        data = request.get_json()
+        groups = data.get('groups', [])
+
+        if not groups:
+            return jsonify({'error': 'No groups provided'}), 400
+
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        for item in groups:
+            group_id = item.get('group_id')
+            sort_order = item.get('sort_order', 0)
+
+            if group_id is None:
+                continue
+
+            cursor.execute("""
+                UPDATE event_epg_groups
+                SET sort_order = ?
+                WHERE id = ?
+            """, (sort_order, group_id))
+
+        conn.commit()
+        conn.close()
+
+        app.logger.info(f"Reordered {len(groups)} event groups")
+        return jsonify({'success': True, 'updated': len(groups)})
+
+    except Exception as e:
+        app.logger.error(f"Error reordering event EPG groups: {e}")
         return jsonify({'error': str(e)}), 500
 
 
@@ -7717,9 +7685,15 @@ def _extract_template_form_data(form):
 
         'idle_enabled': 1 if form.get('idle_enabled') == 'on' else 0,
         'idle_title': form.get('idle_title'),
+        'idle_title_offseason_enabled': 1 if form.get('idle_title_offseason_enabled') == 'on' else 0,
+        'idle_title_offseason': form.get('idle_title_offseason'),
         'idle_subtitle': form.get('idle_subtitle'),
         'idle_description': form.get('idle_description'),
         'idle_art_url': form.get('idle_art_url'),
+        'idle_subtitle_offseason_enabled': 1 if form.get('idle_subtitle_offseason_enabled') == 'on' else 0,
+        'idle_subtitle_offseason': form.get('idle_subtitle_offseason'),
+        'idle_offseason_enabled': 1 if form.get('idle_offseason_enabled') == 'on' else 0,
+        'idle_description_offseason': form.get('idle_description_offseason'),
         'idle_conditional_enabled': 1 if form.get('idle_conditional_enabled') == 'on' else 0,
         'idle_description_final': form.get('idle_description_final'),
         'idle_description_not_final': form.get('idle_description_not_final'),
@@ -7840,8 +7814,8 @@ if __name__ == '__main__':
     sync_timezone_from_env()
 
     # Initialize caches (runs in background if empty)
-    initialize_soccer_cache()
-    initialize_team_league_cache()
+    #initialize_soccer_cache()
+    #initialize_team_league_cache()
 
     # Start the auto-generation scheduler
     # Only start in main process, not in werkzeug reloader process

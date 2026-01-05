@@ -93,6 +93,10 @@ CITY_NAME_VARIANTS = {
     # Italian team name variants → ESPN canonical
     'inter milan': 'internazionale',
     'inter': 'internazionale',
+    # College team aliases (stream name → ESPN name)
+    'albany': 'ualbany',
+    'st leo': 'saint leo',
+    'st. leo': 'saint leo',
 }
 
 
@@ -222,11 +226,9 @@ def extract_date_from_text(text: str) -> Optional[datetime]:
     iso_match = re.search(r'(\d{4})(?:-|\s)(\d{2})(?:-|\s)(\d{2})', text)
     if iso_match:
         try:
-            return datetime(
-                int(iso_match.group(1)),
-                int(iso_match.group(2)),
-                int(iso_match.group(3))
-            )
+            date = datetime(int(iso_match.group(1)), int(iso_match.group(2)), int(iso_match.group(3)))
+            logger.debug(f"iso_match giving {date} from {text}")
+            return date
         except ValueError:
             pass
 
@@ -237,11 +239,9 @@ def extract_date_from_text(text: str) -> Optional[datetime]:
             year = int(us_full_match.group(3))
             if year < 100:
                 year += 2000
-            return datetime(
-                year,
-                int(us_full_match.group(1)),
-                int(us_full_match.group(2))
-            )
+            date = datetime(year, int(us_full_match.group(1)), int(us_full_match.group(2)))
+            logger.debug(f"us_full_match giving {date} from {text}")
+            return date
         except ValueError:
             pass
 
@@ -256,6 +256,7 @@ def extract_date_from_text(text: str) -> Optional[datetime]:
             # If date is more than 6 months in the past, assume next year
             if (datetime.now() - date).days > 180:
                 date = datetime(current_year + 1, month, day)
+            logger.debug(f"us_short_match giving {date} from {text}")
             return date
         except ValueError:
             pass
@@ -290,6 +291,7 @@ def extract_date_from_text(text: str) -> Optional[datetime]:
                 date = datetime(current_year, month, day)
                 if (datetime.now() - date).days > 180:
                     date = datetime(current_year + 1, month, day)
+                logger.debug(f"text_month_match giving {date} from {text}")
                 return date
         except ValueError:
             pass
@@ -309,12 +311,102 @@ def extract_date_from_text(text: str) -> Optional[datetime]:
                 date = datetime(current_year, month, day)
                 if (datetime.now() - date).days > 180:
                     date = datetime(current_year + 1, month, day)
+                logger.debug(f"text_month_match_reverse giving {date} from {text}")
                 return date
+        except ValueError:
+            pass
+
+    # Pattern 6: for streams with NFL in the name, assume days of the week if only time is listed.  text.Lower() function does not work here for some reason
+    nfl_stream = re.search(
+        r'NFL', 
+        text
+    )
+    if nfl_stream:
+        logger.debug(f"'{text}' is matched as an NFL stream without a date match")
+        try:
+            date = find_closest_day_date(text)
+            logger.debug(f"find_closest_day_date giving {date} from {text}")
+            return date
         except ValueError:
             pass
 
     return None
 
+def find_closest_day_date(text_string: str) -> Optional[datetime]:
+    """
+    Searches a string for the day of the week, or applies a default based on time.
+    
+    Rules for Default:
+    1. If no day is found, and '8:15' is in the string, assume Thursday.
+    2. Otherwise (if no day and no '8:15'), default to Sunday.
+
+    Args:
+        text_string: The string to search.
+
+    Returns:
+        A datetime.date object representing the closest occurrence of that day.
+    """
+    
+   # 1. Standardized day mapping (all lowercase)
+    day_map = {
+        'monday': 0, 'mon': 0, 'mnf': 0, 
+        'tuesday': 1, 'tue': 1, 
+        'wednesday': 2, 'wed': 2, 
+        'thursday': 3, 'thu': 3, 'tnf': 3, 
+        'friday': 4, 'fri': 4, 
+        'saturday': 5, 'sat': 5, 
+        'sunday': 6, 'sun': 6, 'snf': 6
+    }
+
+    # Prepare regex
+    all_patterns = '|'.join(re.escape(k) for k in day_map.keys())
+    day_pattern = re.compile(r'\b(' + all_patterns + r')\b', re.IGNORECASE)
+    time_pattern_tnf = re.compile(r'8:15')
+    time_pattern_sat_afternoon = re.compile(r'4:30')
+    time_pattern_sat_pm = re.compile(r'8PM')
+
+    # 2. Extract the Day or Apply Default Logic
+    match = day_pattern.search(text_string)
+    
+    if match:
+        matched_key = match.group(1).lower()
+        target_day_index = day_map[matched_key]
+    else:
+        # No day found, check time for conditional default
+        if time_pattern_tnf.search(text_string):
+            # Rule 1: No day, but time is 8:15 -> Assume Thursday
+            target_day_index = 3  # Thursday
+        elif time_pattern_sat_afternoon.search(text_string):
+            # Rule 1: No day, but time is 4:30 -> Assume Saturday
+            target_day_index = 5  # Thursday
+        elif time_pattern_sat_pm.search(text_string):
+            # Rule 1: No day, but time is 8PM -> Assume Saturday
+            target_day_index = 5  # Thursday
+        else:
+            # Rule 2: No day and not 8:15 -> Default to Sunday
+            target_day_index = 6  # Sunday
+
+    # 3. Calculate the Closest Date
+    today = datetime.now().date()
+    today_index = today.weekday() # Friday = 4
+
+    diff = target_day_index - today_index
+    this_week_date = today + timedelta(days=diff)
+
+    # Check candidates (Last week, This week, Next week)
+    candidates = [this_week_date]
+#        this_week_date - timedelta(days=7),
+#        this_week_date,
+#        this_week_date + timedelta(days=7)
+#    ]
+    
+    # Return the date with the smallest absolute difference from today
+    # If there's a tie, min() picks the first one; 
+    # using a custom key ensures we get the closest.
+    closest_date = min(candidates, key=lambda d: abs(d - today))
+    closest_date = datetime.combine(closest_date, datetime.min.time())
+
+    return closest_date
 
 def extract_time_from_text(text: str) -> Optional[datetime]:
     """
@@ -821,10 +913,11 @@ class TeamMatcher:
         Find and mask all date patterns in text, returning masked text and positions.
 
         Handles:
-        - ISO: 2025-11-30
-        - US with year: 11/30/2025, 11/30/25
-        - US without year: 11/30
+        - ISO: 2025-11-30, 2025 11 30
+        - US with year: 11/30/2025, 11/30/25, 11.30.2025, 11.30.25
+        - US without year: 11/30, 11.30
         - Text month: Nov 30, November 30
+        - Reverse text month: 30 Nov, 30 November, 30th Nov, 30th November
 
         Args:
             text: Raw text that may contain dates
@@ -835,18 +928,18 @@ class TeamMatcher:
         masked = text
         found_dates = []
 
-        # Pattern 1: ISO format (2025-11-30)
-        iso_pattern = re.compile(r'\d{4}-\d{2}-\d{2}')
+        # Pattern 1: ISO format (2025-11-30) or ISO format with spaces (2025 11 30)
+        iso_pattern = re.compile(r'\d{4}(?:-|\s)\d{2}(?:-|\s)\d{2}')
         for match in iso_pattern.finditer(text):
             found_dates.append((match.group(0), match.start(), match.end()))
 
-        # Pattern 2: US format with year (11/30/2025 or 11/30/25)
-        us_full_pattern = re.compile(r'\d{1,2}/\d{1,2}/\d{2,4}')
+        # Pattern 2: US format with year (11/30/2025 or 11/30/25 or 11.30.2025 or 11.30.25)
+        us_full_pattern = re.compile(r'\d{1,2}(?:/|\.)\d{1,2}(?:/|\.)\d{2,4}')
         for match in us_full_pattern.finditer(text):
             found_dates.append((match.group(0), match.start(), match.end()))
 
-        # Pattern 3: US format without year (11/30) - avoid matching if already part of longer pattern
-        us_short_pattern = re.compile(r'\d{1,2}/\d{1,2}(?!/)')
+        # Pattern 3: US format without year (11/30 or 11.30) - avoid matching if already part of longer pattern
+        us_short_pattern = re.compile(r'\d{1,2}(?:/|\.)\d{1,2}(?!/)')
         for match in us_short_pattern.finditer(text):
             overlap = False
             for _, start, end in found_dates:
@@ -864,6 +957,16 @@ class TeamMatcher:
             re.IGNORECASE
         )
         for match in text_month_pattern.finditer(text):
+            found_dates.append((match.group(0), match.start(), match.end()))
+
+        # Pattern 5: Reverse text month format (30 Nov, 30 November, 30th Nov, 30th November)
+        text_month_pattern_reverse = re.compile(
+            r'\d{1,2}(?:st|nd|rd|th)?\s+(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|'
+            r'apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|'
+            r'nov(?:ember)?|dec(?:ember)?)',
+            re.IGNORECASE
+        )
+        for match in text_month_pattern_reverse.finditer(text):
             found_dates.append((match.group(0), match.start(), match.end()))
 
         # Sort by position (reverse) for replacement

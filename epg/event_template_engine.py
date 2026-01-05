@@ -122,9 +122,31 @@ class EventTemplateEngine:
         variables['matchup_abbrev'] = f"{away_team.get('abbrev', '')} @ {home_team.get('abbrev', '')}"
 
         # =====================================================================
+        # COMPETITOR IDENTIFICATION FOR SHORT TEAM NAMES
+        # =====================================================================
+
+        competitions = event.get('competitions', [])
+        comp = competitions[0]
+        competitors = comp.get('competitors', [])
+        home_team_competitor = {}
+        away_team_competitor = {}
+        for competitor in competitors:
+            team_data = competitor.get('team', {})
+
+            team_info_competitor = {
+                'name_short': team_data.get('shortDisplayName') or team_data.get('name', ''),
+            }
+
+            if competitor.get('homeAway') == 'home':
+                home_team_competitor = team_info_competitor
+            elif competitor.get('homeAway') == 'away':
+                away_team_competitor = team_info_competitor
+
+        # =====================================================================
         # HOME TEAM VARIABLES
         # =====================================================================
 
+        variables['home_team_short'] = home_team_competitor.get('name_short', '')
         variables['home_team'] = home_team.get('name', '')
         variables['home_team_abbrev'] = home_team.get('abbrev', '')
         variables['home_team_abbrev_lower'] = variables['home_team_abbrev'].lower()
@@ -156,6 +178,7 @@ class EventTemplateEngine:
         # AWAY TEAM VARIABLES
         # =====================================================================
 
+        variables['away_team_short'] = away_team_competitor.get('name_short', '')
         variables['away_team'] = away_team.get('name', '')
         variables['away_team_abbrev'] = away_team.get('abbrev', '')
         variables['away_team_abbrev_lower'] = variables['away_team_abbrev'].lower()

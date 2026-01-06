@@ -5213,7 +5213,7 @@
     },
     {
       "name": "winner",
-      "description": "Winning team short name",
+      "description": "Winning team full name",
       "source": "Calculated",
       "category": "\ud83c\udfc6 Scores & Results",
       "icon": "\ud83e\udd47",
@@ -5235,8 +5235,8 @@
       }
     },
     {
-      "name": "winner_full",
-      "description": "Winning team full name",
+      "name": "winner_short",
+      "description": "Winning team short name",
       "source": "Calculated",
       "category": "\ud83c\udfc6 Scores & Results",
       "icon": "\ud83e\udd47",
@@ -5327,8 +5327,8 @@
       }
     },
     {
-      "name": "loser_full",
-      "description": "Losing team full name",
+      "name": "loser_short",
+      "description": "Losing team short name",
       "source": "Calculated",
       "category": "\ud83c\udfc6 Scores & Results",
       "icon": "\ud83e\udd47",

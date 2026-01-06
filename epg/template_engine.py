@@ -133,7 +133,7 @@ class TemplateEngine:
 
         # Use team_config as fallback when game data is not available
         variables['team_name'] = our_team.get('name', '') or team_config.get('team_name', '')
-        variables['team_name_short'] = our_team.get('name_short', '') or team_config.get('team_name_short', '')
+        variables['team_name_short'] = our_team.get('name_short', '') or team_config.get('name', '')
         variables['team_abbrev'] = our_team.get('abbrev', '') or team_config.get('team_abbrev', '')
         variables['team_abbrev_lower'] = variables['team_abbrev'].lower()
 

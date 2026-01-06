@@ -982,7 +982,7 @@ class ESPNClient:
 
         return {
             'team_name': team.get('displayName') or team.get('name', ''),
-            'team_name_short': team.get('shortDisplayName') or team.get('name_short', ''),
+            'team_name_short': team.get('shortDisplayName') or team.get('name', ''),
             'team_abbrev': team.get('abbreviation', ''),
             'team_slug': team.get('slug', team_slug),
             'league': league,

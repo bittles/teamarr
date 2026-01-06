@@ -6,6 +6,8 @@
 
 <p align="center"><strong>Dynamic EPG Generator for Sports Channels</strong></p>
 
+# Current changes in this fork are some more default date recognition patterns.  Date patterns with a '.' or space as a separator instead of a - or /.  Also if stream name has 'NFL' in it with just a time and no date in it, attempts to assume the day of the week based on common game times for those days and then resolve date from that.  Some new variables available for team names: team_name_short, home_team_short, away_team_short, winner_short, loser_short, matchup_short.  Lists the team name minus the location (e.g. Patriots instead of New England Patriots).  Two others are winner_score and loser_score for some more flexibility to list scores than just using event_result.
+
 Teamarr creates rich, dynamic Electronic Program Guide (EPG) data for your sports channels. It fetches real-time schedules from ESPN and generates XMLTV-format EPG files with intelligent descriptions that adapt based on game context—streaks, odds, matchups, and more.
 
 ---

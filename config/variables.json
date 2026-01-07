@@ -5230,8 +5230,8 @@
       ],
       "available_suffixes": [],
       "examples_by_sport": {
-        "NFL": "Giants",
-        "NBA": "Lakers"
+        "NFL": "New York Giants",
+        "NBA": "Los Angeles Lakers"
       }
     },
     {
@@ -5253,8 +5253,8 @@
       ],
       "available_suffixes": [],
       "examples_by_sport": {
-        "NFL": "New York Giants",
-        "NBA": "Los Angeles Lakers"
+        "NFL": "Giants",
+        "NBA": "Lakers"
       }
     },
     {
@@ -5322,8 +5322,8 @@
       ],
       "available_suffixes": [],
       "examples_by_sport": {
-        "NFL": "Patriots",
-        "NBA": "Celtics"
+        "NFL": "New England Patriots",
+        "NBA": "Boston Celtics"
       }
     },
     {
@@ -5345,8 +5345,8 @@
       ],
       "available_suffixes": [],
       "examples_by_sport": {
-        "NFL": "New England Patriots",
-        "NBA": "Boston Celtics"
+        "NFL": "Patriots",
+        "NBA": "Celtics"
       }
     },
     {

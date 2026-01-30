@@ -2924,7 +2924,7 @@ def settings_update():
             'dispatcharr_password', 'dispatcharr_epg_id',
             'channel_create_timing', 'channel_delete_timing', 'include_final_events',
             'event_lookahead_days', 'default_duplicate_event_handling',
-            'soccer_cache_refresh_frequency',
+            'soccer_cache_refresh_frequency', 'team_cache_refresh_frequency',
             'channel_range_start', 'channel_range_end'
         ]
 

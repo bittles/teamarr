@@ -1491,28 +1491,48 @@ class ChannelLifecycleManager:
                 dispatcharr_uuid = dispatcharr_channel.get('uuid')  # Immutable identifier
 
                 # Add to channel profiles if configured (supports multiple)
-                added_to_profiles = []
-                for profile_id in channel_profile_ids:
-                    profile_result = self.channel_api.add_channel_to_profile(
+                ## 
+                all_dispatcharr_profiles = self.channel_api.get_channel_profiles()
+                dispatcharr_profile_ids = [dispatch_profile_id.get('id') for dispatch_profile_id in all_dispatcharr_profiles]
+                
+                ids_to_remove = [x for x in dispatcharr_profile_ids if x not in channel_profile_ids]
+                
+                #added_to_profiles = []
+                added_to_profiles = dispatcharr_profile_ids
+                # Remove from profiles no longer in the group config
+                for profile_id in ids_to_remove:
+                    remove_result = self.channel_api.remove_channel_from_profile(
                         profile_id, dispatcharr_channel_id
                     )
-                    if not profile_result.get('success'):
-                        error_msg = profile_result.get('error', 'Unknown error')
-                        logger.warning(
-                            f"Failed to add channel #{channel_number} '{channel_name}' to profile {profile_id}: {error_msg}"
-                        )
-                        # Track failed profile additions for visibility
-                        if 'profile_errors' not in results:
-                            results['profile_errors'] = []
-                        results['profile_errors'].append({
-                            'channel_name': channel_name,
-                            'channel_number': channel_number,
-                            'profile_id': profile_id,
-                            'error': error_msg
-                        })
+                    if remove_result.get('success'):
+                        logger.debug(f"Removed channel {dispatcharr_channel_id} from profile {profile_id}")
+                        added_to_profiles.remove(profile_id)
                     else:
-                        logger.info(f"Added channel #{channel_number} '{channel_name}' to profile {profile_id}")
-                        added_to_profiles.append(profile_id)
+                        logger.warning(
+                            f"Failed to remove channel {dispatcharr_channel_id} from profile {profile_id}: "
+                            f"{remove_result.get('error')}"
+                        )
+                #for profile_id in channel_profile_ids:
+                #    profile_result = self.channel_api.add_channel_to_profile(
+                #        profile_id, dispatcharr_channel_id
+                #    )
+                #    if not profile_result.get('success'):
+                #        error_msg = profile_result.get('error', 'Unknown error')
+                #        logger.warning(
+                #            f"Failed to add channel #{channel_number} '{channel_name}' to profile {profile_id}: #{error_msg}"
+               #         )
+               #         # Track failed profile additions for visibility
+               #         if 'profile_errors' not in results:
+               #             results['profile_errors'] = []
+               #         results['profile_errors'].append({
+               #             'channel_name': channel_name,
+               #             'channel_number': channel_number,
+               #             'profile_id': profile_id,
+               #             'error': error_msg
+               #         })
+               #     else:
+               #         logger.info(f"Added channel #{channel_number} '{channel_name}' to profile {profile_id}")
+               #         added_to_profiles.append(profile_id)
 
             # Note: EPG association happens AFTER EPG refresh in Dispatcharr
             # See associate_epg_with_channels() method

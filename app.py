@@ -7033,7 +7033,7 @@ def api_channel_info(channel_id):
             'event_epg_group_id': channel.get('event_epg_group_id'),
             'event_epg_group_name': group.get('group_name') if group else None,
             'channel_group_id': channel.get('channel_group_id'),
-            'channel_profile_id': channel.get('channel_profile_id'),
+            'channel_profile_id': channel.get('channel_profile_ids'),
             'stream_profile_id': channel.get('stream_profile_id'),
 
             # Event

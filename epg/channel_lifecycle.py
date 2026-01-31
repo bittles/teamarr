@@ -1491,15 +1491,17 @@ class ChannelLifecycleManager:
                 dispatcharr_uuid = dispatcharr_channel.get('uuid')  # Immutable identifier
 
                 # Add to channel profiles if configured (supports multiple)
-                ## 
+                # Teamarr's new channels default to all profiles, need to get all available dispatcharr profiles then remove ones teamarr's not using
                 all_dispatcharr_profiles = self.channel_api.get_channel_profiles()
                 dispatcharr_profile_ids = [dispatch_profile_id.get('id') for dispatch_profile_id in all_dispatcharr_profiles]
-                
+
+
+                # consolidate all profiles that are in dispatcharr but not in the group's config
                 ids_to_remove = [x for x in dispatcharr_profile_ids if x not in channel_profile_ids]
                 
-                #added_to_profiles = []
+                # added_to_profiles = [] # start with all dispatcharr profiles below then subtract from there instead of blank and adding
                 added_to_profiles = dispatcharr_profile_ids
-                # Remove from profiles no longer in the group config
+                # Remove from profiles not in the group config
                 for profile_id in ids_to_remove:
                     remove_result = self.channel_api.remove_channel_from_profile(
                         profile_id, dispatcharr_channel_id
@@ -1512,6 +1514,7 @@ class ChannelLifecycleManager:
                             f"Failed to remove channel {dispatcharr_channel_id} from profile {profile_id}: "
                             f"{remove_result.get('error')}"
                         )
+                # comment out adding profiles since we're working the other way
                 #for profile_id in channel_profile_ids:
                 #    profile_result = self.channel_api.add_channel_to_profile(
                 #        profile_id, dispatcharr_channel_id
